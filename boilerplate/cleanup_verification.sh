@@ -1,5 +1,4 @@
 #!/bin/bash
-# cleanup_verification.sh - Verify all resource cleanup
 
 set -e
 
@@ -73,14 +72,12 @@ if lsmod | grep -q monitor; then
     sudo rmmod monitor 2>/dev/null && {
         check_pass "Kernel module unloaded successfully"
         
-        # Check for memory leaks in kernel log
         if dmesg | tail -20 | grep -q "Module unloaded"; then
             check_pass "Clean module exit message in dmesg"
         else
             check_fail "No clean exit message in dmesg"
         fi
         
-        # Reload for continued testing
         sudo insmod monitor.ko 2>/dev/null || true
     } || {
         check_fail "Kernel module failed to unload"
@@ -114,7 +111,6 @@ if [ -d logs ]; then
     if [ "$LOG_COUNT" -gt 0 ]; then
         check_pass "Log files created successfully"
         
-        # Check for log file handles
         if [ ! -z "$ENGINE_PID" ]; then
             OPEN_LOGS=$(sudo lsof -p $ENGINE_PID 2>/dev/null | grep ".log" | wc -l || echo "0")
             echo "Open log file handles: $OPEN_LOGS"
@@ -138,7 +134,6 @@ if [ ! -z "$ENGINE_PID" ]; then
     echo "Containers in metadata: $CONTAINER_COUNT"
     echo "Actual container processes: $ACTUAL_PROCS"
     
-    # Allow some margin for recently exited
     DIFF=$((CONTAINER_COUNT - ACTUAL_PROCS))
     if [ $DIFF -ge 0 ] && [ $DIFF -le 2 ]; then
         check_pass "Metadata consistent with actual processes"
@@ -151,7 +146,6 @@ fi
 echo ""
 
 echo "8. Memory leak check (kernel module)..."
-# This is a basic check - proper leak detection needs tools like kmemleak
 SLAB_INFO=$(sudo cat /proc/slabinfo 2>/dev/null | grep -E "kmalloc" | head -3 || echo "")
 if [ ! -z "$SLAB_INFO" ]; then
     echo "Kernel slab allocator stats available"

@@ -1,5 +1,4 @@
 #!/bin/bash
-# test_experiments.sh - Run all required experiments and collect data
 
 set -e
 
@@ -8,13 +7,11 @@ echo "Multi-Container Runtime - Test Suite"
 echo "========================================="
 echo ""
 
-# Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Check prerequisites
 check_prerequisites() {
     echo -e "${YELLOW}Checking prerequisites...${NC}"
     
@@ -39,11 +36,9 @@ check_prerequisites() {
     echo ""
 }
 
-# Create results directory
 mkdir -p test_results
 RESULTS_DIR="test_results"
 
-# Test 1: Multi-container supervision
 test_multicontainer() {
     echo -e "${YELLOW}Test 1: Multi-container Supervision${NC}"
     echo "Starting multiple containers..."
@@ -61,11 +56,9 @@ test_multicontainer() {
     echo ""
 }
 
-# Test 2: Logging system
 test_logging() {
     echo -e "${YELLOW}Test 2: Logging System${NC}"
     
-    # Start a container that produces output
     sudo ./engine start logger ./rootfs-gamma /bin/sh -c 'for i in 1 2 3 4 5; do echo "Log entry $i"; sleep 1; done' --soft-mib 40 --hard-mib 64 > ${RESULTS_DIR}/test2_start.txt 2>&1
     
     sleep 6
@@ -84,11 +77,9 @@ test_logging() {
     echo ""
 }
 
-# Test 3: Soft limit warning
 test_soft_limit() {
     echo -e "${YELLOW}Test 3: Soft Limit Warning${NC}"
     
-    # Clear dmesg buffer
     sudo dmesg -C
     
     echo "Starting memory-intensive container with low soft limit..."
@@ -97,7 +88,6 @@ test_soft_limit() {
     echo "Waiting for soft limit warning (15 seconds)..."
     sleep 15
     
-    # Capture kernel log
     dmesg | grep -i "soft limit" > ${RESULTS_DIR}/test3_dmesg_soft.txt 2>&1 || echo "No soft limit warning yet"
     dmesg | tail -30 > ${RESULTS_DIR}/test3_dmesg_full.txt 2>&1
     
@@ -111,11 +101,9 @@ test_soft_limit() {
     echo ""
 }
 
-# Test 4: Hard limit enforcement
 test_hard_limit() {
     echo -e "${YELLOW}Test 4: Hard Limit Enforcement${NC}"
     
-    # Clear dmesg buffer
     sudo dmesg -C
     
     echo "Starting container with very low hard limit..."
@@ -124,7 +112,6 @@ test_hard_limit() {
     echo "Waiting for hard limit kill (20 seconds)..."
     sleep 20
     
-    # Capture results
     dmesg | grep -i "hard limit" > ${RESULTS_DIR}/test4_dmesg_hard.txt 2>&1 || echo "No hard limit kill yet"
     dmesg | tail -30 > ${RESULTS_DIR}/test4_dmesg_full.txt 2>&1
     sudo ./engine ps > ${RESULTS_DIR}/test4_ps.txt 2>&1
@@ -139,7 +126,6 @@ test_hard_limit() {
     echo ""
 }
 
-# Test 5: Scheduling experiment - CPU priority
 test_cpu_priority() {
     echo -e "${YELLOW}Test 5: Scheduling Experiment - CPU Priority${NC}"
     
@@ -158,19 +144,16 @@ test_cpu_priority() {
         sleep 5
     done
     
-    # Get final statistics
     ps -eo pid,ni,pcpu,time,comm | grep cpu_hog > ${RESULTS_DIR}/test5_final_stats.txt 2>&1
     
     echo -e "${GREEN}✓ Test 5 complete. See ${RESULTS_DIR}/test5_*.txt${NC}"
     echo "SCREENSHOT 7: Capture: ps -eo pid,ni,pcpu,time,comm | grep cpu_hog"
     echo ""
     
-    # Stop the CPU workloads
     sudo ./engine stop cpu-high > /dev/null 2>&1
     sudo ./engine stop cpu-low > /dev/null 2>&1
 }
 
-# Test 6: CPU vs I/O bound
 test_cpu_vs_io() {
     echo -e "${YELLOW}Test 6: CPU-bound vs I/O-bound${NC}"
     
@@ -189,18 +172,15 @@ test_cpu_vs_io() {
         sleep 5
     done
     
-    # Get context switch statistics
     pidstat -w 1 5 > ${RESULTS_DIR}/test6_context_switches.txt 2>&1 || echo "pidstat not available"
     
     echo -e "${GREEN}✓ Test 6 complete. See ${RESULTS_DIR}/test6_*.txt${NC}"
     echo ""
     
-    # Stop workloads
     sudo ./engine stop cpuwork > /dev/null 2>&1
     sudo ./engine stop iowork > /dev/null 2>&1
 }
 
-# Test 7: Cleanup verification
 test_cleanup() {
     echo -e "${YELLOW}Test 7: Cleanup Verification${NC}"
     
@@ -230,7 +210,6 @@ test_cleanup() {
     echo ""
 }
 
-# Generate summary report
 generate_report() {
     echo -e "${YELLOW}Generating Summary Report...${NC}"
     
@@ -269,7 +248,6 @@ EOF
     echo -e "${GREEN}✓ Summary report generated${NC}"
 }
 
-# Main execution
 main() {
     check_prerequisites
     
@@ -309,5 +287,4 @@ main() {
     echo "4. Unload kernel module: sudo rmmod monitor"
 }
 
-# Run main function
 main

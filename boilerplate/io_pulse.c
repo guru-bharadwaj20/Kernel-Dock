@@ -1,16 +1,4 @@
-/*
- * io_pulse.c - I/O-oriented workload for scheduler experiments.
- *
- * Usage:
- *   /io_pulse [iterations] [sleep_ms]
- *
- * The program writes small bursts to a file and sleeps between them.
- * This gives students an easy I/O-heavy workload to compare with
- * cpu_hog when discussing responsiveness and scheduler behavior.
- *
- * If you copy this binary into an Alpine rootfs, make sure it is built in a
- * format that can run there.
- */
+
 
 #include <fcntl.h>
 #include <stdio.h>
