@@ -25,7 +25,6 @@ fail() {
 echo "== Supervised Runtime Project Preflight =="
 
 if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
     source /etc/os-release
     [[ "${ID:-}" == "ubuntu" ]] || fail "Unsupported distro: ${ID:-unknown}. Use Ubuntu 22.04/24.04 VM."
     case "${VERSION_ID:-}" in
