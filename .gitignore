@@ -10,7 +10,20 @@ cpu_hog
 io_pulse
 memory_hog
 
-# Ignore build files
+# Ignore kernel module build artifacts
 *.o
 *.ko
 *.d
+*.mod
+*.mod.c
+*.symvers
+*.order
+modules.order
+Module.symvers
+.tmp_versions/
+
+# Ignore runtime artifacts
+logs/
+test_results/
+*.log
+/tmp/mini_runtime.sock

@@ -11,7 +11,7 @@
 #include <linux/pid.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
-#include <linux/timer.h>
+#include <linux/workqueue.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
@@ -38,7 +38,8 @@ static DEFINE_MUTEX(monitored_lock);
 
 
 
-static struct timer_list monitor_timer;
+static struct workqueue_struct *monitor_wq;
+static struct delayed_work monitor_work;
 static dev_t dev_num;
 static struct cdev c_dev;
 static struct class *cl;
@@ -100,12 +101,13 @@ static void kill_process(const char *container_id,
 }
 
 
-static void timer_callback(struct timer_list *t)
+/* Runs in process context (workqueue) so mutex_lock is safe. */
+static void monitor_work_fn(struct work_struct *work)
 {
-    
-
     struct monitored_process *entry, *tmp;
     long rss_bytes;
+
+    (void)work;
 
     mutex_lock(&monitored_lock);
 
@@ -133,7 +135,7 @@ static void timer_callback(struct timer_list *t)
 
     mutex_unlock(&monitored_lock);
 
-    mod_timer(&monitor_timer, jiffies + CHECK_INTERVAL_SEC * HZ);
+    queue_delayed_work(monitor_wq, &monitor_work, CHECK_INTERVAL_SEC * HZ);
 }
 
 
@@ -237,8 +239,16 @@ static int __init monitor_init(void)
         return -1;
     }
 
-    timer_setup(&monitor_timer, timer_callback, 0);
-    mod_timer(&monitor_timer, jiffies + CHECK_INTERVAL_SEC * HZ);
+    monitor_wq = create_singlethread_workqueue("container_monitor");
+    if (!monitor_wq) {
+        cdev_del(&c_dev);
+        device_destroy(cl, dev_num);
+        class_destroy(cl);
+        unregister_chrdev_region(dev_num, 1);
+        return -ENOMEM;
+    }
+    INIT_DELAYED_WORK(&monitor_work, monitor_work_fn);
+    queue_delayed_work(monitor_wq, &monitor_work, CHECK_INTERVAL_SEC * HZ);
 
     printk(KERN_INFO "[container_monitor] Module loaded. Device: /dev/%s\n", DEVICE_NAME);
     return 0;
@@ -247,11 +257,10 @@ static int __init monitor_init(void)
 
 static void __exit monitor_exit(void)
 {
-    del_timer_sync(&monitor_timer);
-
-    
-
     struct monitored_process *entry, *tmp;
+
+    cancel_delayed_work_sync(&monitor_work);
+    destroy_workqueue(monitor_wq);
 
     mutex_lock(&monitored_lock);
 

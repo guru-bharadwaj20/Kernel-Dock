@@ -59,9 +59,12 @@ test_multicontainer() {
 test_logging() {
     echo -e "${YELLOW}Test 2: Logging System${NC}"
     
-    sudo ./engine start logger ./rootfs-gamma /bin/sh -c 'for i in 1 2 3 4 5; do echo "Log entry $i"; sleep 1; done' --soft-mib 40 --hard-mib 64 > ${RESULTS_DIR}/test2_start.txt 2>&1
+    # Note: execlp runs a single command with no arguments, so we use a
+    # workload binary that produces stdout output by default.
+    sudo ./engine start logger ./rootfs-gamma /cpu_hog --soft-mib 40 --hard-mib 64 > ${RESULTS_DIR}/test2_start.txt 2>&1
     
-    sleep 6
+    echo "Waiting for log output (10 seconds)..."
+    sleep 10
     
     echo "Checking log files..."
     ls -lh logs/ > ${RESULTS_DIR}/test2_logs_list.txt 2>&1
@@ -73,6 +76,9 @@ test_logging() {
     else
         echo -e "${RED}⚠ Warning: Log file not created${NC}"
     fi
+    
+    # Stop the container after capturing logs
+    sudo ./engine stop logger > /dev/null 2>&1 || true
     
     echo ""
 }
@@ -185,7 +191,7 @@ test_cleanup() {
     echo -e "${YELLOW}Test 7: Cleanup Verification${NC}"
     
     echo "Stopping all containers..."
-    sudo ./engine ps | grep -oE "ID: [a-z-]+" | cut -d' ' -f2 | while read container_id; do
+    sudo ./engine ps | grep -oE "ID: [a-zA-Z0-9_-]+" | awk '{print $2}' | while read container_id; do
         if [ ! -z "$container_id" ]; then
             echo "Stopping $container_id..."
             sudo ./engine stop $container_id > /dev/null 2>&1 || true
