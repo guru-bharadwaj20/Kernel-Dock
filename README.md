@@ -344,11 +344,11 @@ CFS aims for fairness by dividing CPU time proportionally to weights. However, p
 
 ### Kernel Monitor Locking
 
-**Decision:** Mutex instead of spinlock for monitored list
+**Decision:** Mutex instead of spinlock for monitored list, with a workqueue for periodic checks
 
 **Tradeoff:** Cannot use in hard IRQ context, but allows sleeping during long operations
 
-**Justification:** Our timer callback runs in process context (timer_setup creates deferrable timer). RSS checking via `get_mm_rss()` can be slow (page table walk). Mutex allows this without holding a spinlock, preventing latency issues.
+**Justification:** Our periodic RSS check runs in process context via a kernel workqueue (`create_singlethread_workqueue`). RSS checking via `get_mm_rss()` can be slow (page table walk). Running in a workqueue allows us to use a mutex (which can sleep) instead of a spinlock, preventing latency issues. A raw kernel timer (`timer_setup`) would run in softirq context where sleeping is forbidden.
 
 ---
 
@@ -369,9 +369,9 @@ CFS aims for fairness by dividing CPU time proportionally to weights. However, p
 
 **Decision:** User-space metadata in supervisor, minimal kernel state
 
-**Tradeoff:** Requires careful synchronization between SIGCHLD handler and command handlers
+**Tradeoff:** Requires careful synchronization between signal-driven reaping and command handlers
 
-**Justification:** Kernel should enforce policy (memory limits) not track application state (container metadata). User-space is more flexible for querying, debugging, and extending metadata without kernel recompiles.
+**Justification:** Kernel should enforce policy (memory limits) not track application state (container metadata). User-space is more flexible for querying, debugging, and extending metadata without kernel recompiles. We use a self-pipe pattern for SIGCHLD — the signal handler writes to a pipe and the main event loop performs the actual reaping and metadata updates under proper locking, avoiding async-signal-safety issues.
 
 ---
 
