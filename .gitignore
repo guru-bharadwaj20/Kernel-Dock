@@ -1,3 +1,32 @@
+# Ignore all root filesystems
+boilerplate/rootfs-*
+
+# Ignore downloaded archives
+*.tar.gz
+
+# Ignore binaries
+engine
+cpu_hog
+io_pulse
+memory_hog
+
+# Ignore kernel module build artifacts
+*.o
+*.ko
+*.d
+*.mod
+*.mod.c
+*.symvers
+*.order
+modules.order
+Module.symvers
+.tmp_versions/
+
+# Ignore runtime artifacts
+logs/
+test_results/
+*.log
+/tmp/mini_runtime.sock
 solved
 
 # Build artifacts (user-space)
