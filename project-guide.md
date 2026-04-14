@@ -32,6 +32,16 @@ sudo apt update
 sudo apt install -y build-essential linux-headers-$(uname -r)
 ```
 
+This repository also includes a minimal GitHub Actions smoke check that is copied into student forks. It is intentionally limited to CI-safe steps on a hosted runner and does **not** replace VM-based testing.
+
+The smoke check expects this command to succeed:
+
+```bash
+make -C boilerplate ci
+```
+
+That target should build only the user-space binaries needed for a quick compile check and should not require `sudo`, kernel headers, module loading, rootfs setup, or a running supervisor.
+
 Run the environment preflight check before implementation:
 
 ```bash
@@ -306,6 +316,14 @@ We expect you to copy the boilerplate and work on top of that, but you may then 
 4. At least two workload/test programs used for memory and scheduling demonstrations
 5. `Makefile` — must support building all of the above with a single `make`
 6. `README.md`
+
+For the inherited GitHub Actions smoke check, keep a CI-safe build path available through:
+
+```bash
+make -C boilerplate ci
+```
+
+This is only for quick user-space compilation checks on GitHub-hosted runners. Your full project must still build and run in the required Ubuntu VM environment.
 
 #### `README.md`
 
