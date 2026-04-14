@@ -8,6 +8,9 @@ USER_TARGETS := engine memory_hog cpu_hog io_pulse
 
 all: $(USER_TARGETS) module
 
+ci: WORKLOAD_LDFLAGS =
+ci: $(USER_TARGETS)
+
 module: monitor.ko
 
 engine: engine.c monitor_ioctl.h
@@ -32,4 +35,4 @@ clean:
 	rm -rf logs
 	rm -f /tmp/mini_runtime.sock
 
-.PHONY: all module clean
+.PHONY: all ci module clean
