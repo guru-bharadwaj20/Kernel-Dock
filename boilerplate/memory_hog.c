@@ -1,17 +1,4 @@
-/*
- * memory_hog.c - Memory pressure workload for soft / hard limit testing.
- *
- * Default behavior:
- *   - allocate 8 MiB every second
- *   - touch each page so RSS actually grows
- *
- * Usage:
- *   /memory_hog [chunk_mb] [sleep_ms]
- *
- * If you plan to copy this binary into an Alpine rootfs, build it in a way
- * that is runnable inside that filesystem, such as static linking or
- * rebuilding it from inside the rootfs/toolchain you choose.
- */
+
 
 #include <stdio.h>
 #include <stdlib.h>
