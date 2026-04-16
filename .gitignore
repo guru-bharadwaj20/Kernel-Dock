@@ -1,35 +1,8 @@
-# Ignore all root filesystems
-boilerplate/rootfs-*
-
-# Ignore downloaded archives
-*.tar.gz
-
-# Ignore binaries
+# User-space compiled binaries
 engine
 cpu_hog
 io_pulse
 memory_hog
-
-# Ignore kernel module build artifacts
-*.o
-*.ko
-*.d
-*.mod
-*.mod.c
-*.symvers
-*.order
-modules.order
-Module.symvers
-.tmp_versions/
-
-# Ignore runtime artifacts
-logs/
-test_results/
-*.log
-/tmp/mini_runtime.sock
-solved
-
-# Build artifacts (user-space)
 boilerplate/engine
 boilerplate/memory_hog
 boilerplate/cpu_hog
@@ -38,26 +11,32 @@ boilerplate/io_pulse
 # Kernel module build artifacts
 *.ko
 *.o
+*.d
 *.mod
+*.mod.o
 *.mod.c
-Module.symvers
+*.symvers
+*.order
 modules.order
-*.cmd
+Module.symvers
+.*.cmd
 .tmp_versions/
 
-# Root filesystems
-rootfs-base/
-rootfs-*/
-*.tar.gz
-
-# Logs
+# Runtime artifacts and logs
 *.log
 logs/
-
-# Runtime socket
+test_results/
 /tmp/mini_runtime.sock
+solved
+
+# Root filesystems & downloaded archives
+rootfs-base/
+rootfs-*/
+boilerplate/rootfs-*/
+*.tar.gz
 
 # Editor / OS junk
 *.swp
 *~
 .vscode/
+.DS_Store
