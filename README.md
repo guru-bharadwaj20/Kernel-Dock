@@ -164,49 +164,63 @@ make -C boilerplate ci
 
 This smoke check does not test kernel-module loading, supervisor runtime behavior, or container execution.
 
+### 8. Repository Contents Coverage
+
+The repository also includes utility scripts used for local validation and cleanup:
+
+- `boilerplate/environment-check.sh`
+- `boilerplate/test_experiments.sh`
+- `boilerplate/cleanup_verification.sh`
+
+CI workflow file:
+
+- `.github/workflows/submission-smoke.yml`
+
 ---
 
 ## 📸 Demo Screenshots
 
 ### 1. Multi-Container Supervision
-![Multi-container supervision](screenshots/multi_container.png)
+![Multi-container supervision](Screenshots/1_multi_container_supervision.png)
 
 *Caption: Two containers (alpha and beta) running simultaneously under one supervisor process.*
 
 ### 2. Metadata Tracking
-![Metadata tracking](screenshots/metadata.png)
+![Metadata tracking](Screenshots/2_metadata_tracking_ps.png)
 
 *Caption: `ps` command showing container IDs, PIDs, states, and memory limits.*
 
 ### 3. Bounded-Buffer Logging
-![Logging system](screenshots/logging.png)
+![Logging system](Screenshots/3_bounded_buffer_logging.png)
 
 *Caption: Log files captured through producer-consumer logging pipeline.*
 
 ### 4. CLI and IPC
-![CLI commands](screenshots/cli_ipc.png)
+![CLI commands](Screenshots/4_cli_ipc.png)
 
 *Caption: CLI command sent via UNIX socket with supervisor response.*
 
 ### 5. Soft-Limit Warning
-![Soft limit](screenshots/soft_limit.png)
+![Soft limit](Screenshots/5_soft_limit_warning.png)
 
 *Caption: Kernel log showing soft memory limit warning event.*
 
 ### 6. Hard-Limit Enforcement
-![Hard limit](screenshots/hard_limit.png)
+![Hard limit](Screenshots/6_hard_limit_enforcement.png)
 
 *Caption: Container killed by kernel module after exceeding hard memory limit.*
 
 ### 7. Scheduling Experiment
-![Scheduling](screenshots/scheduling.png)
+![Scheduling](Screenshots/7_scheduling_experiment.png)
 
 *Caption: Two CPU-bound containers with different nice values showing different CPU shares.*
 
 ### 8. Clean Teardown
-![Cleanup](screenshots/cleanup.png)
+![Cleanup (containers stopped)](Screenshots/8a_clean_teardown_stopped.png)
 
-*Caption: No zombie processes remain after container shutdown.*
+![Cleanup (module unloaded)](Screenshots/8b_clean_teardown_module_unloaded.png)
+
+*Caption: No zombie processes remain after container shutdown, and the kernel monitor module is unloaded cleanly.*
 
 ---
 
