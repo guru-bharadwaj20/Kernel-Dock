@@ -181,44 +181,44 @@ CI workflow file:
 ## 📸 Demo Screenshots
 
 ### 1. Multi-Container Supervision
-![Multi-container supervision](Screenshots/1_multi_container_supervision.png)
+![Multi-container supervision](screenshots/1_multi_container_supervision.png)
 
 *Caption: Two containers (alpha and beta) running simultaneously under one supervisor process.*
 
 ### 2. Metadata Tracking
-![Metadata tracking](Screenshots/2_metadata_tracking_ps.png)
+![Metadata tracking](screenshots/2_metadata_tracking_ps.png)
 
 *Caption: `ps` command showing container IDs, PIDs, states, and memory limits.*
 
 ### 3. Bounded-Buffer Logging
-![Logging system](Screenshots/3_bounded_buffer_logging.png)
+![Logging system](screenshots/3_bounded_buffer_logging.png)
 
 *Caption: Log files captured through producer-consumer logging pipeline.*
 
 ### 4. CLI and IPC
-![CLI commands](Screenshots/4_cli_ipc.png)
+![CLI commands](screenshots/4_cli_ipc.png)
 
 *Caption: CLI command sent via UNIX socket with supervisor response.*
 
 ### 5. Soft-Limit Warning
-![Soft limit](Screenshots/5_soft_limit_warning.png)
+![Soft limit](screenshots/5_soft_limit_warning.png)
 
 *Caption: Kernel log showing soft memory limit warning event.*
 
 ### 6. Hard-Limit Enforcement
-![Hard limit](Screenshots/6_hard_limit_enforcement.png)
+![Hard limit](screenshots/6_hard_limit_enforcement.png)
 
 *Caption: Container killed by kernel module after exceeding hard memory limit.*
 
 ### 7. Scheduling Experiment
-![Scheduling](Screenshots/7_scheduling_experiment.png)
+![Scheduling](screenshots/7_scheduling_experiment.png)
 
 *Caption: Two CPU-bound containers with different nice values showing different CPU shares.*
 
 ### 8. Clean Teardown
-![Cleanup (containers stopped)](Screenshots/8a_clean_teardown_stopped.png)
+![Cleanup (containers stopped)](screenshots/8a_clean_teardown_stopped.png)
 
-![Cleanup (module unloaded)](Screenshots/8b_clean_teardown_module_unloaded.png)
+![Cleanup (module unloaded)](screenshots/8b_clean_teardown_module_unloaded.png)
 
 *Caption: No zombie processes remain after container shutdown, and the kernel monitor module is unloaded cleanly.*
 
