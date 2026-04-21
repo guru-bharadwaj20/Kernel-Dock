@@ -134,6 +134,7 @@ static char run_signal_container_id[CONTAINER_ID_LEN];
 
 /* ── Async-signal-safe signal handler ──────────────────────────────── */
 
+/* Notify the main loop about incoming signals through the self-pipe. */
 static void unified_signal_handler(int sig)
 {
     int saved_errno = errno;
@@ -144,6 +145,7 @@ static void unified_signal_handler(int sig)
 
 /* ── Usage ──────────────────────────────────────────────────────────── */
 
+/* Print command-line usage for supervisor and client subcommands. */
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -159,6 +161,7 @@ static void usage(const char *prog)
 
 /* ── Argument parsing ───────────────────────────────────────────────── */
 
+/* Parse a MiB flag value and store it as bytes in the target field. */
 static int parse_mib_flag(const char *flag,
                           const char *value,
                           unsigned long *target_bytes)
@@ -182,6 +185,7 @@ static int parse_mib_flag(const char *flag,
     return 0;
 }
 
+/* Parse optional runtime flags such as memory limits and nice value. */
 static int parse_optional_flags(control_request_t *req,
                                 int argc,
                                 char *argv[],
@@ -236,6 +240,7 @@ static int parse_optional_flags(control_request_t *req,
     return 0;
 }
 
+/* Convert container state enum values to user-facing text labels. */
 static const char *state_to_string(container_state_t state)
 {
     switch (state) {
@@ -256,6 +261,7 @@ static const char *state_to_string(container_state_t state)
 
 /* ── Bounded buffer ─────────────────────────────────────────────────── */
 
+/* Initialize bounded buffer synchronization primitives and counters. */
 static int bounded_buffer_init(bounded_buffer_t *buffer)
 {
     int rc;
@@ -282,6 +288,7 @@ static int bounded_buffer_init(bounded_buffer_t *buffer)
     return 0;
 }
 
+/* Destroy all synchronization primitives owned by the bounded buffer. */
 static void bounded_buffer_destroy(bounded_buffer_t *buffer)
 {
     pthread_cond_destroy(&buffer->not_full);
@@ -289,6 +296,7 @@ static void bounded_buffer_destroy(bounded_buffer_t *buffer)
     pthread_mutex_destroy(&buffer->mutex);
 }
 
+/* Mark the bounded buffer as shutting down and wake blocked threads. */
 static void bounded_buffer_begin_shutdown(bounded_buffer_t *buffer)
 {
     pthread_mutex_lock(&buffer->mutex);
@@ -298,6 +306,7 @@ static void bounded_buffer_begin_shutdown(bounded_buffer_t *buffer)
     pthread_mutex_unlock(&buffer->mutex);
 }
 
+/* Push one log item into the buffer, blocking while it is full. */
 static int bounded_buffer_push(bounded_buffer_t *buffer, const log_item_t *item)
 {
     pthread_mutex_lock(&buffer->mutex);
@@ -317,6 +326,7 @@ static int bounded_buffer_push(bounded_buffer_t *buffer, const log_item_t *item)
     return 0;
 }
 
+/* Pop one log item from the buffer, blocking while it is empty. */
 static int bounded_buffer_pop(bounded_buffer_t *buffer, log_item_t *item)
 {
     pthread_mutex_lock(&buffer->mutex);
@@ -338,6 +348,7 @@ static int bounded_buffer_pop(bounded_buffer_t *buffer, log_item_t *item)
 
 /* ── Logging threads ────────────────────────────────────────────────── */
 
+/* Consume buffered log chunks and append them to per-container log files. */
 static void *logging_thread(void *arg)
 {
     supervisor_ctx_t *ctx = (supervisor_ctx_t *)arg;
@@ -377,6 +388,7 @@ typedef struct {
     char container_id[CONTAINER_ID_LEN];
 } producer_args_t;
 
+/* Read container stdout/stderr from a pipe and enqueue log chunks. */
 static void *producer_thread(void *arg)
 {
     producer_args_t *args = (producer_args_t *)arg;
@@ -402,6 +414,7 @@ static void *producer_thread(void *arg)
 
 /* ── Container child function ───────────────────────────────────────── */
 
+/* Configure container namespaces/rootfs, then execute the requested command. */
 static int child_fn(void *arg)
 {
     child_config_t *cfg = (child_config_t *)arg;
@@ -434,6 +447,7 @@ static int child_fn(void *arg)
 
 /* ── Kernel monitor integration ─────────────────────────────────────── */
 
+/* Register a container PID and memory limits with the kernel monitor. */
 static int register_with_monitor(int monitor_fd,
                                  const char *container_id,
                                  pid_t host_pid,
@@ -454,6 +468,7 @@ static int register_with_monitor(int monitor_fd,
     return 0;
 }
 
+/* Unregister a container PID from the kernel monitor device. */
 static int unregister_from_monitor(int monitor_fd, const char *container_id, pid_t host_pid)
 {
     struct monitor_request req;
@@ -471,12 +486,14 @@ static int unregister_from_monitor(int monitor_fd, const char *container_id, pid
 /* ── Container list operations ──────────────────────────────────────── */
 /* All list functions require the caller to hold ctx->metadata_lock.    */
 
+/* Insert a container record at the head of the in-memory list. */
 static void add_container(supervisor_ctx_t *ctx, container_record_t *rec)
 {
     rec->next = ctx->containers;
     ctx->containers = rec;
 }
 
+/* Find a container record by its logical container identifier. */
 static container_record_t *find_container_by_id(supervisor_ctx_t *ctx, const char *id)
 {
     container_record_t *curr = ctx->containers;
@@ -488,6 +505,7 @@ static container_record_t *find_container_by_id(supervisor_ctx_t *ctx, const cha
     return NULL;
 }
 
+/* Find a container record by host PID. */
 static container_record_t *find_container_by_pid(supervisor_ctx_t *ctx, pid_t pid)
 {
     container_record_t *curr = ctx->containers;
@@ -501,6 +519,7 @@ static container_record_t *find_container_by_pid(supervisor_ctx_t *ctx, pid_t pi
 
 /* ── Container lifecycle ────────────────────────────────────────────── */
 
+/* Spawn a container process, track metadata, and wire up log capture. */
 static int create_container(supervisor_ctx_t *ctx, const control_request_t *req)
 {
     int pipefd[2];
@@ -594,6 +613,7 @@ static int create_container(supervisor_ctx_t *ctx, const control_request_t *req)
 
 /* Reap exited children and update container metadata.
  * Called from the main event loop — safe to lock, call ioctl, etc. */
+/* Process any exited child processes and finalize their container state. */
 static void reap_children(supervisor_ctx_t *ctx)
 {
     int status;
@@ -652,6 +672,7 @@ static void reap_children(supervisor_ctx_t *ctx)
 }
 
 /* Send SIGKILL to containers whose stop grace period has expired. */
+/* Escalate pending stop requests from SIGTERM to SIGKILL after timeout. */
 static void check_stop_escalation(supervisor_ctx_t *ctx)
 {
     time_t now = time(NULL);
@@ -672,6 +693,7 @@ static void check_stop_escalation(supervisor_ctx_t *ctx)
 
 /* ── Command handlers ───────────────────────────────────────────────── */
 
+/* Handle the START command by creating a new background container. */
 static void handle_cmd_start(supervisor_ctx_t *ctx, const control_request_t *req,
                              control_response_t *resp)
 {
@@ -699,6 +721,7 @@ static void handle_cmd_start(supervisor_ctx_t *ctx, const control_request_t *req
 
 /* Returns 1 if the response should be sent immediately (error path),
  * or 0 if the response is deferred until the container exits (success). */
+/* Handle the RUN command and optionally defer the response until exit. */
 static int handle_cmd_run(supervisor_ctx_t *ctx, const control_request_t *req,
                           control_response_t *resp, int client_fd)
 {
@@ -731,6 +754,7 @@ static int handle_cmd_run(supervisor_ctx_t *ctx, const control_request_t *req,
     return 0;  /* do not send response yet */
 }
 
+/* Build a text table of known containers and their lifecycle details. */
 static void handle_cmd_ps(supervisor_ctx_t *ctx, control_response_t *resp)
 {
     int offset = 0;
@@ -790,6 +814,7 @@ static void handle_cmd_ps(supervisor_ctx_t *ctx, control_response_t *resp)
     resp->status = 0;
 }
 
+/* Handle STOP by requesting graceful termination of a running container. */
 static void handle_cmd_stop(supervisor_ctx_t *ctx, const control_request_t *req,
                             control_response_t *resp)
 {
@@ -824,6 +849,7 @@ static void handle_cmd_stop(supervisor_ctx_t *ctx, const control_request_t *req,
             req->container_id, STOP_GRACE_SECONDS);
 }
 
+/* Return the captured log output for a specific container. */
 static void handle_cmd_logs(supervisor_ctx_t *ctx, const control_request_t *req,
                             control_response_t *resp)
 {
@@ -860,6 +886,7 @@ static void handle_cmd_logs(supervisor_ctx_t *ctx, const control_request_t *req,
 
 /* ── Signal-pipe drain and dispatch ─────────────────────────────────── */
 
+/* Drain pending signal bytes and dispatch to the proper handler path. */
 static void drain_signal_pipe(supervisor_ctx_t *ctx)
 {
     unsigned char sig;
@@ -875,6 +902,7 @@ static void drain_signal_pipe(supervisor_ctx_t *ctx)
 
 /* ── Client connection handler ──────────────────────────────────────── */
 
+/* Read one client request, execute it, and send or defer a response. */
 static void handle_client_connection(supervisor_ctx_t *ctx)
 {
     int client_fd = accept(ctx->server_fd, NULL, NULL);
@@ -925,6 +953,7 @@ static void handle_client_connection(supervisor_ctx_t *ctx)
 
 /* ── Supervisor main ────────────────────────────────────────────────── */
 
+/* Run the supervisor event loop and perform orderly runtime shutdown. */
 static int run_supervisor(const char *rootfs)
 {
     (void)rootfs;
@@ -1130,6 +1159,7 @@ static int run_supervisor(const char *rootfs)
 
 /* ── Client-side helpers ────────────────────────────────────────────── */
 
+/* Send a control request to the supervisor and return the response code. */
 static int send_control_request(const control_request_t *req)
 {
     int sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -1197,12 +1227,14 @@ static int send_control_request(const control_request_t *req)
     return resp.status;
 }
 
+/* Mark that the run client received a termination-related signal. */
 static void run_client_signal_handler(int sig)
 {
     (void)sig;
     run_signal_pending = 1;
 }
 
+/* Parse and dispatch the START subcommand request. */
 static int cmd_start(int argc, char *argv[])
 {
     control_request_t req;
@@ -1228,6 +1260,7 @@ static int cmd_start(int argc, char *argv[])
     return send_control_request(&req);
 }
 
+/* Parse and dispatch the RUN subcommand with signal forwarding support. */
 static int cmd_run(int argc, char *argv[])
 {
     control_request_t req;
@@ -1284,6 +1317,7 @@ static int cmd_run(int argc, char *argv[])
     return rc;
 }
 
+/* Dispatch the PS subcommand to list tracked containers. */
 static int cmd_ps(void)
 {
     control_request_t req;
@@ -1294,6 +1328,7 @@ static int cmd_ps(void)
     return send_control_request(&req);
 }
 
+/* Parse and dispatch the LOGS subcommand for a container. */
 static int cmd_logs(int argc, char *argv[])
 {
     control_request_t req;
@@ -1310,6 +1345,7 @@ static int cmd_logs(int argc, char *argv[])
     return send_control_request(&req);
 }
 
+/* Parse and dispatch the STOP subcommand for a container. */
 static int cmd_stop(int argc, char *argv[])
 {
     control_request_t req;
@@ -1328,6 +1364,7 @@ static int cmd_stop(int argc, char *argv[])
 
 /* ── Entry point ────────────────────────────────────────────────────── */
 
+/* Route CLI invocations to supervisor mode or client subcommands. */
 int main(int argc, char *argv[])
 {
     if (argc < 2) {

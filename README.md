@@ -38,146 +38,6 @@ A lightweight Linux container runtime built from scratch in C, featuring process
 
 ---
 
-## 🚀 Build and Run Instructions
-
-### Prerequisites
-
-**Operating System:** Ubuntu 22.04 or 24.04 (VM with Secure Boot OFF)
-
-Install dependencies:
-```bash
-sudo apt update
-sudo apt install -y build-essential linux-headers-$(uname -r)
-```
-
-### Step 1: Prepare Root Filesystems
-
-```bash
-cd boilerplate
-
-# Download Alpine mini rootfs
-mkdir -p rootfs-base
-wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
-sudo tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C rootfs-base
-
-# Create per-container writable copies
-sudo cp -a ./rootfs-base ./rootfs-alpha
-sudo cp -a ./rootfs-base ./rootfs-beta
-sudo cp -a ./rootfs-base ./rootfs-gamma
-```
-
-### Step 2: Build All Components
-
-```bash
-cd boilerplate
-
-# Build user-space runtime and kernel module
-make
-
-# Copy test workloads into container filesystems
-sudo cp memory_hog cpu_hog io_pulse ./rootfs-alpha/
-sudo cp memory_hog cpu_hog io_pulse ./rootfs-beta/
-sudo cp memory_hog cpu_hog io_pulse ./rootfs-gamma/
-```
-
-### Step 3: Load Kernel Module
-
-```bash
-# Load the memory monitor
-sudo insmod monitor.ko
-
-# Verify module loaded
-lsmod | grep monitor
-
-# Check device created
-ls -l /dev/container_monitor
-
-# View kernel messages
-dmesg | tail
-```
-
-Expected output:
-```
-[container_monitor] Module loaded. Device: /dev/container_monitor
-```
-
-### Step 4: Start Supervisor
-
-**Terminal 1:**
-```bash
-sudo ./engine supervisor ./rootfs-base
-```
-
-Expected output:
-```
-Supervisor started. Listening on /tmp/mini_runtime.sock
-Ready to accept container requests.
-```
-
-### Step 5: Run Containers
-
-**Terminal 2:**
-```bash
-# Start first container
-sudo ./engine start alpha ./rootfs-alpha /bin/sh --soft-mib 32 --hard-mib 64
-
-# Start second container
-sudo ./engine start beta ./rootfs-beta /bin/sh --soft-mib 48 --hard-mib 80
-
-# List running containers
-sudo ./engine ps
-
-# View container logs
-sudo ./engine logs alpha
-
-# Stop a container
-sudo ./engine stop alpha
-```
-
-### Step 6: Cleanup
-
-```bash
-# Stop supervisor (Ctrl+C in Terminal 1)
-
-# Unload kernel module
-sudo rmmod monitor
-
-# Verify cleanup
-dmesg | tail
-```
-
-### 7. GitHub Actions Smoke Check
-
-Your fork will inherit a minimal GitHub Actions workflow from this repository.
-
-That workflow only performs CI-safe checks:
-
-- `make -C boilerplate ci`
-- user-space binary compilation (`engine`, `memory_hog`, `cpu_hog`, `io_pulse`)
-- `./boilerplate/engine` with no arguments must print usage and exit with a non-zero status
-
-The CI-safe build command is:
-
-```bash
-make -C boilerplate ci
-```
-
-This smoke check does not test kernel-module loading, supervisor runtime behavior, or container execution.
-
-### 8. Repository Contents Coverage
-
-The repository also includes utility scripts used for local validation and cleanup:
-
-- `boilerplate/environment-check.sh`
-- `boilerplate/test_experiments.sh`
-- `boilerplate/cleanup_verification.sh`
-
-CI workflow file:
-
-- `.github/workflows/submission-smoke.yml`
-
----
-
 ## 📸 Demo Screenshots
 
 ### 1. Multi-Container Supervision
@@ -467,3 +327,143 @@ This is an educational project for OS concepts. Not intended for production use.
 ---
 
 **Note:** This README documents the final state of the project. See `project-guide.md` for the original specification.
+
+---
+
+## 🚀 Build and Run Instructions
+
+### Prerequisites
+
+**Operating System:** Ubuntu 22.04 or 24.04 (VM with Secure Boot OFF)
+
+Install dependencies:
+```bash
+sudo apt update
+sudo apt install -y build-essential linux-headers-$(uname -r)
+```
+
+### Step 1: Prepare Root Filesystems
+
+```bash
+cd boilerplate
+
+# Download Alpine mini rootfs
+mkdir -p rootfs-base
+wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
+sudo tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C rootfs-base
+
+# Create per-container writable copies
+sudo cp -a ./rootfs-base ./rootfs-alpha
+sudo cp -a ./rootfs-base ./rootfs-beta
+sudo cp -a ./rootfs-base ./rootfs-gamma
+```
+
+### Step 2: Build All Components
+
+```bash
+cd boilerplate
+
+# Build user-space runtime and kernel module
+make
+
+# Copy test workloads into container filesystems
+sudo cp memory_hog cpu_hog io_pulse ./rootfs-alpha/
+sudo cp memory_hog cpu_hog io_pulse ./rootfs-beta/
+sudo cp memory_hog cpu_hog io_pulse ./rootfs-gamma/
+```
+
+### Step 3: Load Kernel Module
+
+```bash
+# Load the memory monitor
+sudo insmod monitor.ko
+
+# Verify module loaded
+lsmod | grep monitor
+
+# Check device created
+ls -l /dev/container_monitor
+
+# View kernel messages
+dmesg | tail
+```
+
+Expected output:
+```
+[container_monitor] Module loaded. Device: /dev/container_monitor
+```
+
+### Step 4: Start Supervisor
+
+**Terminal 1:**
+```bash
+sudo ./engine supervisor ./rootfs-base
+```
+
+Expected output:
+```
+Supervisor started. Listening on /tmp/mini_runtime.sock
+Ready to accept container requests.
+```
+
+### Step 5: Run Containers
+
+**Terminal 2:**
+```bash
+# Start first container
+sudo ./engine start alpha ./rootfs-alpha /bin/sh --soft-mib 32 --hard-mib 64
+
+# Start second container
+sudo ./engine start beta ./rootfs-beta /bin/sh --soft-mib 48 --hard-mib 80
+
+# List running containers
+sudo ./engine ps
+
+# View container logs
+sudo ./engine logs alpha
+
+# Stop a container
+sudo ./engine stop alpha
+```
+
+### Step 6: Cleanup
+
+```bash
+# Stop supervisor (Ctrl+C in Terminal 1)
+
+# Unload kernel module
+sudo rmmod monitor
+
+# Verify cleanup
+dmesg | tail
+```
+
+### 7. GitHub Actions Smoke Check
+
+Your fork will inherit a minimal GitHub Actions workflow from this repository.
+
+That workflow only performs CI-safe checks:
+
+- `make -C boilerplate ci`
+- user-space binary compilation (`engine`, `memory_hog`, `cpu_hog`, `io_pulse`)
+- `./boilerplate/engine` with no arguments must print usage and exit with a non-zero status
+
+The CI-safe build command is:
+
+```bash
+make -C boilerplate ci
+```
+
+This smoke check does not test kernel-module loading, supervisor runtime behavior, or container execution.
+
+### 8. Repository Contents Coverage
+
+The repository also includes utility scripts used for local validation and cleanup:
+
+- `boilerplate/environment-check.sh`
+- `boilerplate/test_experiments.sh`
+- `boilerplate/cleanup_verification.sh`
+
+CI workflow file:
+
+- `.github/workflows/submission-smoke.yml`

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+/* Parse a positive duration in seconds, falling back on invalid input. */
 static unsigned int parse_seconds(const char *arg, unsigned int fallback)
 {
     char *end = NULL;
@@ -14,6 +15,7 @@ static unsigned int parse_seconds(const char *arg, unsigned int fallback)
     return (unsigned int)value;
 }
 
+/* Burn CPU for the requested duration and emit periodic liveness logs. */
 int main(int argc, char *argv[])
 {
     const unsigned int duration = (argc > 1) ? parse_seconds(argv[1], 10) : 10;
