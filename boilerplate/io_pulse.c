@@ -10,6 +10,7 @@
 
 #define DEFAULT_OUTPUT "/tmp/io_pulse.out"
 
+/* Parse a positive unsigned integer, falling back on invalid input. */
 static unsigned int parse_uint(const char *arg, unsigned int fallback)
 {
     char *end = NULL;
@@ -20,6 +21,7 @@ static unsigned int parse_uint(const char *arg, unsigned int fallback)
     return (unsigned int)value;
 }
 
+/* Periodically append lines to a file to create repeatable disk I/O load. */
 int main(int argc, char *argv[])
 {
     const unsigned int iterations = (argc > 1) ? parse_uint(argv[1], 20) : 20;

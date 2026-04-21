@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
+/* Parse a positive size in megabytes, falling back on invalid input. */
 static size_t parse_size_mb(const char *arg, size_t fallback)
 {
     char *end = NULL;
@@ -15,6 +16,7 @@ static size_t parse_size_mb(const char *arg, size_t fallback)
     return (size_t)value;
 }
 
+/* Parse sleep duration in milliseconds and convert it to microseconds. */
 static useconds_t parse_sleep_ms(const char *arg, useconds_t fallback)
 {
     char *end = NULL;
@@ -25,6 +27,7 @@ static useconds_t parse_sleep_ms(const char *arg, useconds_t fallback)
     return (useconds_t)(value * 1000U);
 }
 
+/* Allocate memory chunks in a loop to simulate sustained memory pressure. */
 int main(int argc, char *argv[])
 {
     const size_t chunk_mb = (argc > 1) ? parse_size_mb(argv[1], 8) : 8;

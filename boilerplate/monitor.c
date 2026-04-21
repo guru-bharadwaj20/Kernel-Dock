@@ -45,6 +45,7 @@ static struct cdev c_dev;
 static struct class *cl;
 
 
+/* Return RSS memory in bytes for a PID, or -1 if the task is unavailable. */
 static long get_rss_bytes(pid_t pid)
 {
     struct task_struct *task;
@@ -71,6 +72,7 @@ static long get_rss_bytes(pid_t pid)
 }
 
 
+/* Emit a kernel warning when a process crosses its soft memory limit. */
 static void log_soft_limit_event(const char *container_id,
                                  pid_t pid,
                                  unsigned long limit_bytes,
@@ -82,6 +84,7 @@ static void log_soft_limit_event(const char *container_id,
 }
 
 
+/* Send SIGKILL to a process and log that the hard memory limit was exceeded. */
 static void kill_process(const char *container_id,
                          pid_t pid,
                          unsigned long limit_bytes,
@@ -102,6 +105,7 @@ static void kill_process(const char *container_id,
 
 
 /* Runs in process context (workqueue) so mutex_lock is safe. */
+/* Check registered processes and enforce soft/hard memory thresholds. */
 static void monitor_work_fn(struct work_struct *work)
 {
     struct monitored_process *entry, *tmp;
@@ -139,6 +143,7 @@ static void monitor_work_fn(struct work_struct *work)
 }
 
 
+/* Handle monitor register/unregister ioctl requests from user space. */
 static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
     struct monitor_request req;
@@ -210,6 +215,7 @@ static struct file_operations fops = {
 };
 
 
+/* Initialize the monitor device, workqueue, and periodic scan task. */
 static int __init monitor_init(void)
 {
     if (alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME) < 0)
@@ -255,6 +261,7 @@ static int __init monitor_init(void)
 }
 
 
+/* Tear down monitor resources and unregister all tracked processes. */
 static void __exit monitor_exit(void)
 {
     struct monitored_process *entry, *tmp;
