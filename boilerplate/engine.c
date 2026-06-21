@@ -1,5 +1,3 @@
-
-
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -414,10 +412,16 @@ static void *producer_thread(void *arg)
 
 /* ── Container child function ───────────────────────────────────────── */
 
-/* Configure container namespaces/rootfs, then execute the requested command. */
+/* Configure container namespaces/rootfs, then execute the requested command.
+ * The command string is split on spaces so multi-word commands work (e.g. "/cpu_hog 30"). */
 static int child_fn(void *arg)
 {
     child_config_t *cfg = (child_config_t *)arg;
+    char cmd_copy[CHILD_COMMAND_LEN];
+    char *exec_argv[64];
+    int exec_argc = 0;
+    char *tok;
+
     sethostname(cfg->id, strlen(cfg->id));
     if (chroot(cfg->rootfs) != 0) {
         perror("chroot failed");
@@ -432,15 +436,29 @@ static int child_fn(void *arg)
         perror("mount /proc failed");
         return 1;
     }
-    if (cfg->log_write_fd > 0) {
+    if (cfg->log_write_fd >= 0) {
         dup2(cfg->log_write_fd, STDOUT_FILENO);
         dup2(cfg->log_write_fd, STDERR_FILENO);
         close(cfg->log_write_fd);
     }
     if (cfg->nice_value != 0)
         nice(cfg->nice_value);
-    execlp(cfg->command, cfg->command, NULL);
 
+    strncpy(cmd_copy, cfg->command, CHILD_COMMAND_LEN - 1);
+    cmd_copy[CHILD_COMMAND_LEN - 1] = '\0';
+    tok = strtok(cmd_copy, " ");
+    while (tok && exec_argc < 63) {
+        exec_argv[exec_argc++] = tok;
+        tok = strtok(NULL, " ");
+    }
+    exec_argv[exec_argc] = NULL;
+
+    if (exec_argc == 0) {
+        fprintf(stderr, "Empty command\n");
+        return 1;
+    }
+
+    execvp(exec_argv[0], exec_argv);
     perror("exec failed");
     return 1;
 }
@@ -534,6 +552,7 @@ static int create_container(supervisor_ctx_t *ctx, const control_request_t *req)
     }
 
     memset(cfg, 0, sizeof(*cfg));
+    cfg->log_write_fd = -1;
     strncpy(cfg->id, req->container_id, CONTAINER_ID_LEN - 1);
     strncpy(cfg->rootfs, req->rootfs, PATH_MAX - 1);
     strncpy(cfg->command, req->command, CHILD_COMMAND_LEN - 1);
@@ -613,7 +632,6 @@ static int create_container(supervisor_ctx_t *ctx, const control_request_t *req)
 
 /* Reap exited children and update container metadata.
  * Called from the main event loop — safe to lock, call ioctl, etc. */
-/* Process any exited child processes and finalize their container state. */
 static void reap_children(supervisor_ctx_t *ctx)
 {
     int status;
@@ -671,7 +689,6 @@ static void reap_children(supervisor_ctx_t *ctx)
     }
 }
 
-/* Send SIGKILL to containers whose stop grace period has expired. */
 /* Escalate pending stop requests from SIGTERM to SIGKILL after timeout. */
 static void check_stop_escalation(supervisor_ctx_t *ctx)
 {
@@ -719,9 +736,9 @@ static void handle_cmd_start(supervisor_ctx_t *ctx, const control_request_t *req
             "Container %s started with PID %d", req->container_id, pid);
 }
 
-/* Returns 1 if the response should be sent immediately (error path),
- * or 0 if the response is deferred until the container exits (success). */
-/* Handle the RUN command and optionally defer the response until exit. */
+/* Handle the RUN command: start the container and defer the client response.
+ * Returns 1 to send the response immediately (error path), or 0 to defer
+ * it until the container exits via reap_children() (success path). */
 static int handle_cmd_run(supervisor_ctx_t *ctx, const control_request_t *req,
                           control_response_t *resp, int client_fd)
 {
@@ -769,18 +786,25 @@ static void handle_cmd_ps(supervisor_ctx_t *ctx, control_response_t *resp)
     }
     while (curr && offset < CONTROL_MESSAGE_LEN - 256) {
         char time_str[64];
+        char uptime_str[32] = "";
         struct tm *tm_info = localtime(&curr->started_at);
         strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+
+        if (curr->state == CONTAINER_RUNNING) {
+            long up = (long)(time(NULL) - curr->started_at);
+            snprintf(uptime_str, sizeof(uptime_str), " | Up %ldh%02ldm%02lds",
+                     up / 3600, (up % 3600) / 60, up % 60);
+        }
 
         offset += snprintf(resp->message + offset,
                           CONTROL_MESSAGE_LEN - offset,
                           "ID: %-12s | PID: %-6d | State: %-8s | "
-                          "Soft: %lu MB | Hard: %lu MB | Started: %s",
+                          "Soft: %lu MB | Hard: %lu MB | Started: %s%s",
                           curr->id, curr->host_pid,
                           state_to_string(curr->state),
                           curr->soft_limit_bytes / (1UL << 20),
                           curr->hard_limit_bytes / (1UL << 20),
-                          time_str);
+                          time_str, uptime_str);
 
         /* Show exit information for terminated containers */
         if (curr->state == CONTAINER_EXITED) {
@@ -877,6 +901,16 @@ static void handle_cmd_logs(supervisor_ctx_t *ctx, const control_request_t *req,
         return;
     }
 
+    /* For large log files, show the most recent output (tail semantics). */
+    if (fseek(f, 0, SEEK_END) == 0) {
+        long file_sz = ftell(f);
+        long max_bytes = (long)(CONTROL_MESSAGE_LEN - 1);
+        if (file_sz > max_bytes)
+            fseek(f, -max_bytes, SEEK_END);
+        else
+            rewind(f);
+    }
+
     size_t n = fread(resp->message, 1, CONTROL_MESSAGE_LEN - 1, f);
     resp->message[n] = '\0';
     fclose(f);
@@ -961,7 +995,10 @@ static int run_supervisor(const char *rootfs)
 
     memset(&global_ctx, 0, sizeof(global_ctx));
     pthread_mutex_init(&global_ctx.metadata_lock, NULL);
-    mkdir(LOG_DIR, 0755);
+    if (mkdir(LOG_DIR, 0755) < 0 && errno != EEXIST) {
+        fprintf(stderr, "Warning: could not create log directory '%s': %s\n",
+                LOG_DIR, strerror(errno));
+    }
 
     if (bounded_buffer_init(&global_ctx.log_buffer) != 0) {
         fprintf(stderr, "Failed to initialize bounded buffer\n");

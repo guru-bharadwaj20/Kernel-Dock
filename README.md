@@ -1,14 +1,15 @@
-# Multi-Container Runtime with Memory Monitoring
+# Kernel-Dock: Multi-Container Runtime with Kernel Memory Monitoring
 
-A lightweight Linux container runtime built from scratch in C, featuring process isolation, memory monitoring, and a kernel-space enforcement module.
+A lightweight Linux container runtime built from scratch in C. Implements process isolation via Linux namespaces, a producer-consumer logging pipeline, a UNIX-socket CLI, and a kernel module that enforces per-container memory limits from kernel space.
 
 ---
 
-## 👥 Team Information
+## 👥 Team
 
-**Team Members:**
-- **Guru R Bharadwaj** - SRN: PES1UG24CS177 - Core Runtime & Container Engine
-- **Harsh Pandya** - SRN: PES1UG24CS182 - Logging, IPC, Kernel Monitor & Experiments
+| Name | SRN | Contribution |
+|------|-----|--------------|
+| **Guru R Bharadwaj** | PES1UG24CS177 | Core runtime & container engine |
+| **Harsh Pandya** | PES1UG24CS182 | Logging, IPC, kernel monitor & experiments |
 
 ---
 
@@ -25,308 +26,21 @@ A lightweight Linux container runtime built from scratch in C, featuring process
 └─────────┼───────────────┼────────────────────┼──────────┘
           │               │                    │
     ┌─────▼─────┐   ┌────▼─────┐      ┌──────┴──────┐
-    │ CLI       │   │ Container│      │Bounded      │
-    │ Clients   │   │ Processes│─────▶│Buffer       │
+    │ CLI       │   │ Container│      │ Bounded     │
+    │ Clients   │   │ Processes│─────▶│ Buffer      │
     └───────────┘   └──────────┘ Pipes└─────────────┘
                           │
                     ┌─────▼──────────────────────────┐
-                    │  Kernel Module (monitor.ko)   │
-                    │  - Memory Tracking            │
-                    │  - Soft/Hard Limit Enforcement│
-                    └───────────────────────────────┘
+                    │  Kernel Module (monitor.ko)    │
+                    │  - RSS tracking per container  │
+                    │  - Soft limit: dmesg warning   │
+                    │  - Hard limit: SIGKILL enforce │
+                    └────────────────────────────────┘
 ```
 
----
-
-## 📸 Demo Screenshots
-
-### 1. Multi-Container Supervision
-![Multi-container supervision](screenshots/1_multi_container_supervision.png)
-
-*Caption: Two containers (alpha and beta) running simultaneously under one supervisor process.*
-
-### 2. Metadata Tracking
-![Metadata tracking](screenshots/2_metadata_tracking_ps.png)
-
-*Caption: `ps` command showing container IDs, PIDs, states, and memory limits.*
-
-### 3. Bounded-Buffer Logging
-![Logging system](screenshots/3_bounded_buffer_logging.png)
-
-*Caption: Log files captured through producer-consumer logging pipeline.*
-
-### 4. CLI and IPC
-![CLI commands](screenshots/4_cli_ipc.png)
-
-*Caption: CLI command sent via UNIX socket with supervisor response.*
-
-### 5. Soft-Limit Warning
-![Soft limit](screenshots/5_soft_limit_warning.png)
-
-*Caption: Kernel log showing soft memory limit warning event.*
-
-### 6. Hard-Limit Enforcement
-![Hard limit](screenshots/6_hard_limit_enforcement.png)
-
-*Caption: Container killed by kernel module after exceeding hard memory limit.*
-
-### 7. Scheduling Experiment
-![Scheduling](screenshots/7_scheduling_experiment.png)
-
-*Caption: Two CPU-bound containers with different nice values showing different CPU shares.*
-
-### 8. Clean Teardown
-![Cleanup (containers stopped)](screenshots/8a_clean_teardown_stopped.png)
-
-![Cleanup (module unloaded)](screenshots/8b_clean_teardown_module_unloaded.png)
-
-*Caption: No zombie processes remain after container shutdown, and the kernel monitor module is unloaded cleanly.*
-
----
-
-## 🧪 Scheduling Experiments
-
-### Experiment 1: CPU Priority Impact
-
-**Setup:** Two CPU-bound containers with different nice values (-10 vs 19)
-
-**Results:**
-| Container | Nice | CPU Time | CPU % | Notes |
-|-----------|------|----------|-------|-------|
-| cpu-high  | -10  | 1m 45s   | 65%   | Higher priority, more CPU time |
-| cpu-low   | 19   | 2m 50s   | 35%   | Lower priority, less CPU time |
-
-**Analysis:** The Linux CFS scheduler allocated approximately 1.86x more CPU time to the higher priority process. This demonstrates how nice values affect vruntime calculation in CFS, with lower nice values getting slower vruntime growth and thus more CPU share.
-
-### Experiment 2: CPU-Bound vs I/O-Bound
-
-**Setup:** One CPU-bound (cpu_hog) and one I/O-bound (io_pulse) container
-
-**Results:**
-| Container | Type | CPU % | Wait % | Ctx Switches | Responsiveness |
-|-----------|------|-------|--------|--------------|----------------|
-| cpuwork   | CPU  | 92%   | 2%     | 150          | ~200ms        |
-| iowork    | I/O  | 8%    | 65%    | 4800         | ~10ms         |
-
-**Analysis:** The I/O-bound process received better responsiveness (lower latency) despite using less overall CPU time. CFS prioritizes processes that voluntarily yield the CPU (I/O wait), giving them better interactive performance. This shows the scheduler balancing throughput (CPU-bound) vs responsiveness (I/O-bound).
-
-### Experiment 3: Memory Limit Enforcement
-
-**Setup:** Container with 20 MiB soft limit and 35 MiB hard limit running memory_hog
-
-**Results:**
-- Soft limit warning appeared at 5.2 seconds (RSS: 22 MiB)
-- Hard limit kill occurred at 8.7 seconds (RSS: 37 MiB)
-- Container state transitioned: running → killed
-- Process terminated with SIGKILL from kernel module
-
-**Analysis:** Kernel-space enforcement ensures memory limits cannot be bypassed by user-space processes. The separation of soft (warning) and hard (enforcement) limits allows monitoring without immediate termination, giving operators visibility before critical limits are reached.
-
----
-
-## 🔬 Engineering Analysis
-
-### 1. Isolation Mechanisms
-
-Our runtime achieves process and filesystem isolation through Linux namespaces and chroot:
-
-- **PID Namespace (CLONE_NEWPID):** Each container sees its process as PID 1, creating process tree isolation. The container cannot see or signal host processes.
-- **UTS Namespace (CLONE_NEWUTS):** Allows each container to have its own hostname, demonstrating identity separation.
-- **Mount Namespace (CLONE_NEWNS):** Combined with `chroot()`, isolates the filesystem view. Each container sees only its assigned rootfs directory as `/`.
-- **Shared Resources:** Network namespace, IPC namespace, and user namespace are NOT isolated in this implementation. All containers share the host's network stack, can use the same IPC objects, and run as the same user.
-
-At the kernel level, namespaces are implemented as pointers in `task_struct`. When creating a namespace, the kernel duplicates the parent's namespace structure and gives the child a separate copy, creating isolation while sharing the underlying kernel.
-
-### 2. Supervisor and Process Lifecycle
-
-A long-running parent supervisor is essential for managing multiple concurrent containers:
-
-**Process Creation:** The supervisor uses `clone()` with namespace flags to create isolated child processes. Unlike `fork()`, `clone()` allows fine-grained control over what the child shares vs isolates.
-
-**Parent-Child Relationship:** The supervisor is the direct parent (PPID) of all container processes. This relationship is critical for:
-- Reaping zombie processes via SIGCHLD
-- Tracking container lifecycle through waitpid()
-- Metadata management (PID, state, exit status)
-
-**Signal Delivery:** When a container exits, the kernel sends SIGCHLD to the supervisor. Our handler uses `waitpid(-1, ..., WNOHANG)` in a loop to reap all exited children without blocking. We update container metadata (state, exit code) before returning from the signal handler, ensuring accurate state tracking.
-
-**Metadata Tracking:** We maintain a linked list of container records protected by a mutex. This allows the supervisor to answer queries (ps command) and coordinate lifecycle operations (stop, logs) without relying on kernel state.
-
-### 3. IPC, Threads, and Synchronization
-
-Our system uses two distinct IPC mechanisms and requires careful synchronization:
-
-**Path A - Logging (Pipes):**
-- Container stdout/stderr → pipes → supervisor
-- **Race Condition:** Multiple producer threads pushing to bounded buffer simultaneously
-- **Synchronization:** Mutex + two condition variables (not_full, not_empty)
-  - `pthread_mutex_lock` prevents concurrent buffer modifications
-  - `pthread_cond_wait` on `not_full` blocks producers when buffer is full
-  - `pthread_cond_signal` on `not_empty` wakes consumers when data arrives
-- **Why Mutex?** Buffer operations (head/tail updates) are non-atomic and require mutual exclusion. Condition variables enable efficient waiting without spinning.
-
-**Path B - Control (UNIX Socket):**
-- CLI client → socket → supervisor
-- **Race Condition:** CLI commands reading/modifying container metadata while SIGCHLD handler updates same metadata
-- **Synchronization:** Mutex protecting container linked list
-  - Locked during metadata queries (ps), modifications (start/stop), and SIGCHLD updates
-  - Short critical sections (just list operations) minimize lock contention
-- **Why UNIX Socket?** Supports bidirectional request-response pattern needed for CLI. Pipes are unidirectional and would require two pipes per client.
-
-**Bounded Buffer Design:**
-Without synchronization, the bounded buffer would exhibit:
-- **Lost updates:** Two producers incrementing `count` simultaneously (race on read-modify-write)
-- **Corruption:** Producer writing while consumer reading same slot
-- **Deadlock:** Producer waiting for space that consumer can't create because it's waiting for producer's lock
-
-Our implementation avoids these through standard producer-consumer pattern with condition variables, ensuring no lost data and graceful shutdown.
-
-### 4. Memory Management and Enforcement
-
-**RSS Measurement:** Resident Set Size (RSS) represents the amount of physical RAM currently occupied by a process. We measure RSS in the kernel using `get_mm_rss()`, which sums:
-- Anonymous pages (heap, stack)
-- File-backed pages (mapped files)
-- Shared library pages (counted per-process, not deduplicated)
-
-**What RSS Doesn't Include:**
-- Swapped pages (not in physical memory)
-- Page table overhead
-- Kernel memory used on behalf of the process
-
-**Soft vs Hard Limits:**
-- **Soft Limit:** Warning-only policy. When exceeded, kernel logs a message but allows the process to continue. Emitted once per container to avoid log spam. Useful for monitoring and alerting before critical threshold.
-- **Hard Limit:** Enforcement policy. When exceeded, kernel sends SIGKILL to the process, immediately terminating it. Prevents runaway processes from exhausting system memory.
-
-**Why Kernel-Space Enforcement?**
-- **Security:** User-space processes cannot bypass or manipulate kernel enforcement
-- **Accuracy:** Kernel has direct access to memory management data structures
-- **Reliability:** Enforcement happens even if user-space runtime is compromised or crashes
-- **Performance:** RSS checking happens in timer context without context switches to user space
-
-### 5. Scheduling Behavior
-
-Our experiments demonstrate how Linux's Completely Fair Scheduler (CFS) balances multiple goals:
-
-**Priority and Nice Values (Experiment 1):**
-CFS calculates virtual runtime (vruntime) for each process. Lower nice values get a weight multiplier that makes their vruntime grow slower. When scheduling, CFS picks the task with lowest vruntime from the red-black tree. Result: High priority processes get more CPU cycles because their vruntime increases more slowly.
-
-In our experiment, nice -10 received ~65% CPU while nice 19 received ~35% CPU, roughly matching the expected weight ratio from CFS.
-
-**I/O vs CPU Bound (Experiment 2):**
-I/O-bound processes voluntarily yield the CPU while waiting for I/O. CFS tracks sleep time and gives processes credit when they wake up. This "sleep fairness" means I/O-bound processes, despite using less total CPU time, get low latency (quick response) when they need the CPU.
-
-Our results showed the I/O-bound process with 10x more context switches but 10x better responsiveness, demonstrating CFS's ability to provide both throughput (for CPU-bound) and responsiveness (for I/O-bound).
-
-**Fairness vs Throughput Tradeoff:**
-CFS aims for fairness by dividing CPU time proportionally to weights. However, perfect fairness requires frequent context switches, which hurt throughput (cache pollution, TLB flushes). CFS uses tunable parameters (sched_min_granularity_ns) to balance these goals. Our experiments ran with default kernel parameters, achieving good fairness without excessive switching.
-
----
-
-## 🎯 Design Decisions and Tradeoffs
-
-### Bounded-Buffer Logging
-
-**Decision:** Producer-consumer architecture with mutex and condition variables
-
-**Tradeoff:** Mutex contention during high-throughput logging vs complexity of lock-free design
-
-**Justification:** Logging is not latency-critical. Correctness and maintainability are more important than peak throughput. Mutex+CV provides clear semantics and prevents subtle concurrency bugs that plague lock-free implementations.
-
----
-
-### Kernel Monitor Locking
-
-**Decision:** Mutex instead of spinlock for monitored list, with a workqueue for periodic checks
-
-**Tradeoff:** Cannot use in hard IRQ context, but allows sleeping during long operations
-
-**Justification:** Our periodic RSS check runs in process context via a kernel workqueue (`create_singlethread_workqueue`). RSS checking via `get_mm_rss()` can be slow (page table walk). Running in a workqueue allows us to use a mutex (which can sleep) instead of a spinlock, preventing latency issues. A raw kernel timer (`timer_setup`) would run in softirq context where sleeping is forbidden.
-
----
-
-### IPC Mechanism Choice
-
-**Decision:** UNIX domain socket for control, pipes for logging
-
-**Tradeoff:** Two different IPC mechanisms increases system complexity
-
-**Justification:** 
-- **Sockets:** Support bidirectional request-response needed for CLI (send command, get response)
-- **Pipes:** Perfect for one-way streaming data (container output → supervisor)
-- Using the right tool for each job simplifies the implementation of each component
-
----
-
-### Container State Tracking
-
-**Decision:** User-space metadata in supervisor, minimal kernel state
-
-**Tradeoff:** Requires careful synchronization between signal-driven reaping and command handlers
-
-**Justification:** Kernel should enforce policy (memory limits) not track application state (container metadata). User-space is more flexible for querying, debugging, and extending metadata without kernel recompiles. We use a self-pipe pattern for SIGCHLD — the signal handler writes to a pipe and the main event loop performs the actual reaping and metadata updates under proper locking, avoiding async-signal-safety issues.
-
----
-
-### Soft vs Hard Limits
-
-**Decision:** Two-tier limit system with different policies
-
-**Tradeoff:** More complex than single threshold, requires tracking warning state
-
-**Justification:** Operational visibility. Soft limit provides early warning so operators can intervene. Hard limit is last resort. Two tiers prevent oscillation (kill/restart cycles) that a single threshold might cause near the boundary.
-
----
-
-## 🧹 Resource Cleanup
-
-Our implementation ensures clean teardown through:
-
-1. **Zombie Reaping:** SIGCHLD handler calls `waitpid()` in a loop, reaping all exited children immediately
-2. **Thread Cleanup:** Logger consumer thread checks shutdown flag and exits after draining bounded buffer. Main thread calls `pthread_join()` to wait for logger.
-3. **File Descriptors:** Pipes closed in both parent (after dup2) and child. Socket closed after each client interaction.
-4. **Kernel Resources:** `monitor_exit()` walks monitored list, freeing all entries with `kfree()`. List is empty before module unload.
-5. **Memory Leaks:** Verified with `ps` showing no zombies and `lsmod` showing successful module removal.
-
----
-
-## 📚 Key Learnings
-
-- **Linux Namespaces:** How the kernel creates isolated views while sharing underlying resources
-- **Process Lifecycle:** Parent-child relationships, reaping, and signal handling
-- **Concurrency:** Producer-consumer patterns, condition variables, and race condition prevention
-- **Kernel Module Development:** Character devices, ioctl, timers, and linked list management
-- **Scheduler Behavior:** How CFS balances fairness, priority, and responsiveness
-- **System-Level C Programming:** Memory management, error handling, and resource cleanup
-
----
-
-## 🔮 Future Enhancements
-
-- Network namespace isolation for per-container networking
-- User namespace for unprivileged container execution
-- Cgroup integration for CPU/I/O limits beyond memory
-- Image management and layer support
-- Container networking (bridge, port mapping)
-- Persistent volume management
-
----
-
-## 📄 License
-
-This is an educational project for OS concepts. Not intended for production use.
-
----
-
-## 🙏 Acknowledgments
-
-- Project specification by course instructors
-- Alpine Linux for the mini rootfs
-- Linux kernel documentation and examples
-- Fellow students for testing and feedback
-
----
-
-**Note:** This README documents the final state of the project. See `project-guide.md` for the original specification.
+**Two IPC paths:**
+- **Path A (logging):** container stdout/stderr → pipes → bounded buffer → log files
+- **Path B (control):** CLI client → UNIX socket → supervisor → response
 
 ---
 
@@ -334,12 +48,18 @@ This is an educational project for OS concepts. Not intended for production use.
 
 ### Prerequisites
 
-**Operating System:** Ubuntu 22.04 or 24.04 (VM with Secure Boot OFF)
+**Operating System:** Ubuntu 22.04 or 24.04 in a VM (Secure Boot OFF, no WSL)
 
-Install dependencies:
 ```bash
 sudo apt update
 sudo apt install -y build-essential linux-headers-$(uname -r)
+```
+
+Run the preflight check to validate your environment:
+
+```bash
+cd boilerplate
+sudo ./environment-check.sh
 ```
 
 ### Step 1: Prepare Root Filesystems
@@ -366,7 +86,7 @@ cd boilerplate
 # Build user-space runtime and kernel module
 make
 
-# Copy test workloads into container filesystems
+# Copy workload binaries into container filesystems
 sudo cp memory_hog cpu_hog io_pulse ./rootfs-alpha/
 sudo cp memory_hog cpu_hog io_pulse ./rootfs-beta/
 sudo cp memory_hog cpu_hog io_pulse ./rootfs-gamma/
@@ -375,25 +95,20 @@ sudo cp memory_hog cpu_hog io_pulse ./rootfs-gamma/
 ### Step 3: Load Kernel Module
 
 ```bash
-# Load the memory monitor
 sudo insmod monitor.ko
 
-# Verify module loaded
+# Verify
 lsmod | grep monitor
-
-# Check device created
 ls -l /dev/container_monitor
-
-# View kernel messages
-dmesg | tail
+dmesg | tail -5
 ```
 
-Expected output:
+Expected dmesg output:
 ```
 [container_monitor] Module loaded. Device: /dev/container_monitor
 ```
 
-### Step 4: Start Supervisor
+### Step 4: Start the Supervisor
 
 **Terminal 1:**
 ```bash
@@ -410,60 +125,292 @@ Ready to accept container requests.
 
 **Terminal 2:**
 ```bash
-# Start first container
+# Start containers in the background
 sudo ./engine start alpha ./rootfs-alpha /bin/sh --soft-mib 32 --hard-mib 64
+sudo ./engine start beta  ./rootfs-beta  /bin/sh --soft-mib 48 --hard-mib 80
 
-# Start second container
-sudo ./engine start beta ./rootfs-beta /bin/sh --soft-mib 48 --hard-mib 80
+# Commands now support arguments (e.g. run cpu_hog for 30 seconds)
+sudo ./engine start gamma ./rootfs-gamma "/cpu_hog 30" --soft-mib 16 --hard-mib 32
 
-# List running containers
+# List running containers (shows PID, state, limits, uptime)
 sudo ./engine ps
 
-# View container logs
+# View container log output (shows most recent 4 KB)
 sudo ./engine logs alpha
 
-# Stop a container
+# Stop a container gracefully (SIGTERM → SIGKILL after 5 s)
 sudo ./engine stop alpha
+
+# Run foreground (blocks until container exits, returns exit code)
+sudo ./engine run test ./rootfs-alpha /bin/sh --soft-mib 32 --hard-mib 64
 ```
 
 ### Step 6: Cleanup
 
 ```bash
-# Stop supervisor (Ctrl+C in Terminal 1)
+# Ctrl+C in Terminal 1 triggers orderly supervisor shutdown
 
 # Unload kernel module
 sudo rmmod monitor
+dmesg | tail -5
 
-# Verify cleanup
-dmesg | tail
+# Verify no zombies, no leaked sockets
+./cleanup_verification.sh
 ```
 
-### 7. GitHub Actions Smoke Check
+### GitHub Actions CI
 
-Your fork will inherit a minimal GitHub Actions workflow from this repository.
+The CI workflow (`make -C boilerplate ci`) builds only user-space targets — no sudo or kernel headers needed. It also verifies that running `./engine` with no arguments prints usage and exits non-zero.
 
-That workflow only performs CI-safe checks:
+### Repository Contents
 
-- `make -C boilerplate ci`
-- user-space binary compilation (`engine`, `memory_hog`, `cpu_hog`, `io_pulse`)
-- `./boilerplate/engine` with no arguments must print usage and exit with a non-zero status
+| File | Purpose |
+|------|---------|
+| `engine.c` | Dual-mode binary: supervisor daemon + CLI client |
+| `monitor.c` | Kernel module: RSS tracking and limit enforcement |
+| `monitor_ioctl.h` | Shared ioctl definitions (user/kernel boundary) |
+| `cpu_hog.c` | CPU-bound workload generator |
+| `memory_hog.c` | Memory allocation workload |
+| `io_pulse.c` | I/O-bound workload generator |
+| `Makefile` | Build orchestration (`make`, `make ci`, `make clean`) |
+| `environment-check.sh` | Preflight validation script |
+| `test_experiments.sh` | Automated experiment runner |
+| `cleanup_verification.sh` | Post-run resource leak checker |
 
-The CI-safe build command is:
+---
 
-```bash
-make -C boilerplate ci
-```
+## 📸 Demo Screenshots
 
-This smoke check does not test kernel-module loading, supervisor runtime behavior, or container execution.
+### 1. Multi-Container Supervision
+![Multi-container supervision](screenshots/1_multi_container_supervision.png)
 
-### 8. Repository Contents Coverage
+*Two containers (alpha and beta) running simultaneously under one supervisor process.*
 
-The repository also includes utility scripts used for local validation and cleanup:
+### 2. Metadata Tracking
+![Metadata tracking](screenshots/2_metadata_tracking_ps.png)
 
-- `boilerplate/environment-check.sh`
-- `boilerplate/test_experiments.sh`
-- `boilerplate/cleanup_verification.sh`
+*`ps` command showing container IDs, PIDs, states, memory limits, and uptime.*
 
-CI workflow file:
+### 3. Bounded-Buffer Logging
+![Logging system](screenshots/3_bounded_buffer_logging.png)
 
-- `.github/workflows/submission-smoke.yml`
+*Log files captured through the producer-consumer logging pipeline.*
+
+### 4. CLI and IPC
+![CLI commands](screenshots/4_cli_ipc.png)
+
+*CLI command sent via UNIX socket with supervisor response.*
+
+### 5. Soft-Limit Warning
+![Soft limit](screenshots/5_soft_limit_warning.png)
+
+*Kernel log showing soft memory limit warning event.*
+
+### 6. Hard-Limit Enforcement
+![Hard limit](screenshots/6_hard_limit_enforcement.png)
+
+*Container killed by kernel module after exceeding hard memory limit.*
+
+### 7. Scheduling Experiment
+![Scheduling](screenshots/7_scheduling_experiment.png)
+
+*Two CPU-bound containers with different nice values showing different CPU shares.*
+
+### 8. Clean Teardown
+![Cleanup — containers stopped](screenshots/8a_clean_teardown_stopped.png)
+
+![Cleanup — module unloaded](screenshots/8b_clean_teardown_module_unloaded.png)
+
+*No zombie processes remain after shutdown; kernel monitor module unloads cleanly.*
+
+---
+
+## 🧪 Scheduling Experiments
+
+### Experiment 1: CPU Priority Impact
+
+**Setup:** Two CPU-bound containers with different nice values (-10 vs 19)
+
+| Container | Nice | CPU Time | CPU % | Notes |
+|-----------|------|----------|-------|-------|
+| cpu-high  | -10  | 1m 45s   | 65%   | Higher priority, more CPU time |
+| cpu-low   | 19   | 2m 50s   | 35%   | Lower priority, less CPU time |
+
+**Analysis:** The Linux CFS scheduler allocated approximately 1.86× more CPU time to the higher-priority process. Lower nice values slow vruntime growth, keeping the process at the front of the red-black tree and earning proportionally more scheduled slices.
+
+### Experiment 2: CPU-Bound vs I/O-Bound
+
+**Setup:** One CPU-bound (`cpu_hog`) and one I/O-bound (`io_pulse`) container
+
+| Container | Type | CPU % | Wait % | Ctx Switches | Responsiveness |
+|-----------|------|-------|--------|--------------|----------------|
+| cpuwork   | CPU  | 92%   | 2%     | 150          | ~200 ms        |
+| iowork    | I/O  | 8%    | 65%    | 4800         | ~10 ms         |
+
+**Analysis:** The I/O-bound process received 10× better responsiveness despite using far less CPU. CFS grants "sleep credit" to processes that voluntarily yield for I/O, giving them fast dispatch when they wake. This demonstrates CFS balancing throughput (CPU-bound) against responsiveness (I/O-bound).
+
+### Experiment 3: Memory Limit Enforcement
+
+**Setup:** Container with 20 MiB soft limit / 35 MiB hard limit running `memory_hog`
+
+- Soft limit warning: 5.2 s elapsed (RSS: 22 MiB) — kernel prints to dmesg
+- Hard limit kill: 8.7 s elapsed (RSS: 37 MiB) — kernel sends SIGKILL
+- Container state transitions: `running` → `killed`
+
+**Analysis:** Kernel-space enforcement cannot be bypassed from user space. The two-tier design (warn then kill) gives operators a window to intervene before the process is terminated.
+
+---
+
+## 🔬 Engineering Analysis
+
+### 1. Isolation Mechanisms
+
+- **PID Namespace (`CLONE_NEWPID`):** Container sees itself as PID 1; cannot signal host processes.
+- **UTS Namespace (`CLONE_NEWUTS`):** Each container has its own hostname.
+- **Mount Namespace (`CLONE_NEWNS`) + chroot:** Container sees only its assigned rootfs as `/`.
+- **Not isolated:** Network, IPC, and user namespaces are shared with the host in this implementation.
+
+At the kernel level, namespaces are pointers in `task_struct`. `clone()` with namespace flags duplicates parent namespace structures and assigns the child its own copies, creating isolation while sharing underlying kernel resources.
+
+### 2. Supervisor and Process Lifecycle
+
+`clone()` with namespace flags creates isolated children. The supervisor is the direct parent (PPID) of all containers, critical for:
+
+- Reaping zombie processes via SIGCHLD
+- Tracking lifecycle through `waitpid()`
+- Metadata management (PID, state, exit status)
+
+**Self-pipe pattern:** Signal handlers write the signal number to a pipe; the main `poll()` loop reads and dispatches in a context where it is safe to lock mutexes, call ioctl, etc. This avoids async-signal-safety violations.
+
+**Deferred CMD_RUN responses:** The server keeps the CLI socket FD alive inside the container record. `reap_children()` writes the exit status to that FD when the container exits, giving the CLI client the correct exit code.
+
+### 3. IPC, Threads, and Synchronization
+
+| Mechanism | Path | Synchronization |
+|-----------|------|-----------------|
+| Pipes | Container stdout/stderr → supervisor | Mutex + condition variables |
+| UNIX socket | CLI client ↔ supervisor | Single-threaded main loop |
+| Bounded buffer | Producer threads → consumer thread | `not_full` / `not_empty` CVs |
+
+Without synchronization the bounded buffer would exhibit lost updates (two producers racing on `count`), slot corruption (simultaneous read/write), and potential deadlock. Our mutex + condition-variable design avoids all three.
+
+### 4. Memory Management and Enforcement
+
+**RSS measurement:** The kernel module uses `get_mm_rss()` to sum anonymous pages, file-backed pages, and shared library pages currently in physical RAM.
+
+**Soft vs Hard Limits:**
+- **Soft:** One-time dmesg warning when RSS exceeds the threshold. Useful for monitoring without disrupting the workload.
+- **Hard:** SIGKILL sent from kernel space. Cannot be caught or ignored by user space.
+
+**Why kernel-space enforcement?** User-space processes cannot bypass it, the kernel has direct access to memory data structures, and enforcement works even if the user-space runtime crashes.
+
+**Workqueue vs timer:** RSS checking uses a kernel workqueue (process context) rather than a raw timer (softirq context) because `get_mm_rss()` can be slow (page-table walk) and the workqueue allows `mutex_lock()`, which would deadlock in softirq.
+
+### 5. Scheduling Behavior
+
+CFS assigns virtual runtime (vruntime) to each task. Lower nice values receive a weight multiplier that slows vruntime growth; CFS always schedules the task with the smallest vruntime (stored in a red-black tree). Result: high-priority tasks earn proportionally more CPU cycles.
+
+I/O-bound tasks voluntarily yield the CPU and receive "sleep credit" on wakeup, enabling low-latency dispatch despite low total CPU usage — CFS's "sleep fairness" feature.
+
+---
+
+## 🎯 Design Decisions and Tradeoffs
+
+### Bounded-Buffer Logging
+
+**Decision:** Mutex + condition variables (classic producer-consumer)
+
+**Tradeoff:** Lock contention during high-throughput logging vs complexity of a lock-free ring buffer
+
+**Justification:** Logging is not latency-critical. Correctness and maintainability outweigh peak throughput. Mutex + CV provides clear semantics and avoids subtle memory-ordering bugs.
+
+---
+
+### Kernel Monitor Locking
+
+**Decision:** Mutex over a workqueue instead of spinlock over a timer
+
+**Tradeoff:** Cannot run in hard-IRQ context, but allows sleeping during long operations
+
+**Justification:** `get_mm_rss()` may require a page-table walk. A workqueue runs in process context where `mutex_lock()` is legal; a raw `timer_setup()` runs in softirq where sleeping is forbidden.
+
+---
+
+### IPC Mechanism Choice
+
+**Decision:** UNIX socket for control, pipes for logging
+
+**Tradeoff:** Two different IPC mechanisms increase design surface
+
+**Justification:** Sockets support bidirectional request-response (needed for CLI); pipes are perfect for one-way streaming (container output → supervisor). Using the right tool per job simplifies each component.
+
+---
+
+### Container State Tracking
+
+**Decision:** User-space metadata in supervisor, minimal kernel state
+
+**Tradeoff:** Requires careful synchronization between signal-driven reaping and command handlers
+
+**Justification:** The kernel enforces policy (memory limits); user space tracks application state (metadata). User-space metadata is easier to query, debug, and extend without kernel recompiles. The self-pipe pattern keeps all metadata updates in the main loop under proper locking.
+
+---
+
+### Soft vs Hard Limits
+
+**Decision:** Two-tier limit system with independent policies
+
+**Tradeoff:** More complex than a single threshold; requires tracking `soft_warning_emitted` per container
+
+**Justification:** Operational visibility. Soft limit provides early warning so operators can intervene. Hard limit is the last resort. Two tiers prevent kill/restart oscillation that a single threshold near the boundary would cause.
+
+---
+
+## 🧹 Resource Cleanup
+
+1. **Zombie reaping:** SIGCHLD triggers `reap_children()` via self-pipe; `waitpid(-1, WNOHANG)` loop clears all exited children.
+2. **Thread cleanup:** Logger consumer thread drains the bounded buffer before exiting; main thread calls `pthread_join()` to wait.
+3. **File descriptors:** Pipe write-end closed in parent after `dup2()`; producer thread closes read-end when done; socket closed after each client interaction.
+4. **Kernel resources:** `monitor_exit()` walks the monitored list and calls `kfree()` on every entry before unregistering the device.
+5. **Memory:** Container stacks freed in `reap_children()`; all container records freed on supervisor shutdown.
+
+---
+
+## 📚 Key Learnings
+
+- **Linux Namespaces:** How the kernel creates isolated views while sharing underlying resources
+- **Process Lifecycle:** Parent-child relationships, zombie reaping, and async-signal-safe signal handling
+- **Concurrency:** Producer-consumer patterns, condition variables, and race condition prevention
+- **Kernel Module Development:** Character devices, ioctl, workqueues, and kernel linked list management
+- **Scheduler Behavior:** How CFS balances fairness, priority, and responsiveness
+- **System-Level C Programming:** Memory management, error handling, and resource cleanup at scale
+
+---
+
+## 🔮 Future Enhancements
+
+- Network namespace isolation for per-container networking
+- User namespace for unprivileged container execution
+- Cgroup integration for CPU and I/O limits (beyond memory)
+- Image management and overlay filesystem layer support
+- Container networking (bridge, port mapping)
+- Persistent volume management
+
+---
+
+## 📄 License
+
+Educational project for OS concepts. Not intended for production use.
+
+---
+
+## 🙏 Acknowledgments
+
+- Project specification by course instructors
+- Alpine Linux for the mini rootfs
+- Linux kernel documentation and examples
+- Fellow students for testing and feedback
+
+---
+
+**Note:** See `project-guide.md` for the original assignment specification.
