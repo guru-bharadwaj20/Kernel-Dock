@@ -1,5 +1,3 @@
-
-
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/fs.h>
@@ -20,8 +18,6 @@
 #define DEVICE_NAME "container_monitor"
 #define CHECK_INTERVAL_SEC 1
 
-
-
 struct monitored_process {
     pid_t pid;
     char container_id[MONITOR_NAME_LEN];
@@ -31,19 +27,14 @@ struct monitored_process {
     struct list_head list;
 };
 
-
-
 static LIST_HEAD(monitored_list);
 static DEFINE_MUTEX(monitored_lock);
-
-
 
 static struct workqueue_struct *monitor_wq;
 static struct delayed_work monitor_work;
 static dev_t dev_num;
 static struct cdev c_dev;
 static struct class *cl;
-
 
 /* Return RSS memory in bytes for a PID, or -1 if the task is unavailable. */
 static long get_rss_bytes(pid_t pid)
@@ -71,7 +62,6 @@ static long get_rss_bytes(pid_t pid)
     return rss_pages * PAGE_SIZE;
 }
 
-
 /* Emit a kernel warning when a process crosses its soft memory limit. */
 static void log_soft_limit_event(const char *container_id,
                                  pid_t pid,
@@ -82,7 +72,6 @@ static void log_soft_limit_event(const char *container_id,
            "[container_monitor] SOFT LIMIT container=%s pid=%d rss=%ld limit=%lu\n",
            container_id, pid, rss_bytes, limit_bytes);
 }
-
 
 /* Send SIGKILL to a process and log that the hard memory limit was exceeded. */
 static void kill_process(const char *container_id,
@@ -103,9 +92,8 @@ static void kill_process(const char *container_id,
            container_id, pid, rss_bytes, limit_bytes);
 }
 
-
-/* Runs in process context (workqueue) so mutex_lock is safe. */
-/* Check registered processes and enforce soft/hard memory thresholds. */
+/* Check registered processes and enforce soft/hard memory thresholds.
+ * Runs in process context (workqueue) so mutex_lock is safe here. */
 static void monitor_work_fn(struct work_struct *work)
 {
     struct monitored_process *entry, *tmp;
@@ -123,13 +111,13 @@ static void monitor_work_fn(struct work_struct *work)
             continue;
         }
         if ((unsigned long)rss_bytes > entry->hard_limit_bytes) {
-            kill_process(entry->container_id, entry->pid, 
+            kill_process(entry->container_id, entry->pid,
                         entry->hard_limit_bytes, rss_bytes);
             list_del(&entry->list);
             kfree(entry);
             continue;
         }
-        if ((unsigned long)rss_bytes > entry->soft_limit_bytes && 
+        if ((unsigned long)rss_bytes > entry->soft_limit_bytes &&
             !entry->soft_warning_emitted) {
             log_soft_limit_event(entry->container_id, entry->pid,
                                 entry->soft_limit_bytes, rss_bytes);
@@ -141,7 +129,6 @@ static void monitor_work_fn(struct work_struct *work)
 
     queue_delayed_work(monitor_wq, &monitor_work, CHECK_INTERVAL_SEC * HZ);
 }
-
 
 /* Handle monitor register/unregister ioctl requests from user space. */
 static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
@@ -157,13 +144,12 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         return -EFAULT;
 
     if (cmd == MONITOR_REGISTER) {
+        struct monitored_process *entry;
+
         printk(KERN_INFO
                "[container_monitor] Registering container=%s pid=%d soft=%lu hard=%lu\n",
                req.container_id, req.pid, req.soft_limit_bytes, req.hard_limit_bytes);
 
-        
-
-        struct monitored_process *entry;
         if (req.soft_limit_bytes > req.hard_limit_bytes)
             return -EINVAL;
         entry = kmalloc(sizeof(*entry), GFP_KERNEL);
@@ -183,37 +169,36 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         return 0;
     }
 
-    printk(KERN_INFO
-           "[container_monitor] Unregister request container=%s pid=%d\n",
-           req.container_id, req.pid);
+    /* MONITOR_UNREGISTER */
+    {
+        struct monitored_process *entry, *tmp;
+        int found = 0;
 
-    
+        printk(KERN_INFO
+               "[container_monitor] Unregister request container=%s pid=%d\n",
+               req.container_id, req.pid);
 
-    struct monitored_process *entry, *tmp;
-    int found = 0;
+        mutex_lock(&monitored_lock);
 
-    mutex_lock(&monitored_lock);
-
-    list_for_each_entry_safe(entry, tmp, &monitored_list, list) {
-        if (entry->pid == req.pid) {
-            list_del(&entry->list);
-            kfree(entry);
-            found = 1;
-            break;
+        list_for_each_entry_safe(entry, tmp, &monitored_list, list) {
+            if (entry->pid == req.pid) {
+                list_del(&entry->list);
+                kfree(entry);
+                found = 1;
+                break;
+            }
         }
+
+        mutex_unlock(&monitored_lock);
+
+        return found ? 0 : -ENOENT;
     }
-
-    mutex_unlock(&monitored_lock);
-
-    return found ? 0 : -ENOENT;
 }
 
-
-static struct file_operations fops = {
+static const struct file_operations fops = {
     .owner = THIS_MODULE,
     .unlocked_ioctl = monitor_ioctl,
 };
-
 
 /* Initialize the monitor device, workqueue, and periodic scan task. */
 static int __init monitor_init(void)
@@ -260,7 +245,6 @@ static int __init monitor_init(void)
     return 0;
 }
 
-
 /* Tear down monitor resources and unregister all tracked processes. */
 static void __exit monitor_exit(void)
 {
@@ -290,4 +274,5 @@ module_init(monitor_init);
 module_exit(monitor_exit);
 
 MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Guru R Bharadwaj, Harsh Pandya");
 MODULE_DESCRIPTION("Supervised multi-container memory monitor");
