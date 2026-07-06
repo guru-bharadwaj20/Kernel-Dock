@@ -128,7 +128,9 @@ echo ""
 
 echo "7. Checking container metadata consistency..."
 if [ ! -z "$ENGINE_PID" ]; then
-    CONTAINER_COUNT=$(sudo ./engine ps 2>/dev/null | grep "ID:" | wc -l || echo "0")
+    # engine ps emits a two-row header (column names + separator) followed by
+    # one row per container; count the data rows.
+    CONTAINER_COUNT=$(sudo ./engine ps 2>/dev/null | tail -n +3 | grep -cvE '^[[:space:]]*$' || echo "0")
     ACTUAL_PROCS=$(ps aux | grep -E "rootfs-(alpha|beta|gamma)" | grep -v grep | wc -l || echo "0")
     
     echo "Containers in metadata: $CONTAINER_COUNT"
