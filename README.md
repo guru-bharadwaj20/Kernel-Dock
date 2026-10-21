@@ -1,257 +1,160 @@
-# Kernel-Dock: Linux Container Runtime
+# Kernel-Dock
 
-A lightweight container runtime built from scratch in C, implementing process isolation, memory enforcement, and a full CLI — without using Docker, cgroups, or existing container infrastructure.
+**A Linux container runtime built from scratch in C — namespaces, a supervisor daemon, a kernel module that enforces memory limits, and a full CLI, without Docker or cgroups.**
 
----
+[![CI](https://img.shields.io/badge/CI-compile_+_usage_smoke-2ea44f?logo=githubactions&logoColor=white)](.github/workflows/submission-smoke.yml)
+[![C](https://img.shields.io/badge/C-pthreads-A8B9CC?logo=c&logoColor=white)](boilerplate/engine.c)
+[![Kernel module](https://img.shields.io/badge/kernel-monitor.ko-FCC624?logo=linux&logoColor=black)](boilerplate/monitor.c)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04_|_24.04-E95420?logo=ubuntu&logoColor=white)](boilerplate/environment-check.sh)
+[![Tests](https://img.shields.io/badge/suite-10_tests-brightgreen)](boilerplate/test_experiments.sh)
+[![Scope](https://img.shields.io/badge/scope-educational-lightgrey)](project-guide.md)
 
-## 👥 Team
-
-| Name | SRN | Contribution |
-|------|-----|--------------|
-| **Guru R Bharadwaj** | PES1UG24CS177 | Core runtime, container engine, CLI |
-| **Harsh Pandya** | PES1UG24CS182 | Logging pipeline, IPC, kernel monitor, experiments |
-
----
-
-## ✨ Features
-
-| Feature | Details |
-|---------|---------|
-| **Process isolation** | PID, UTS, and Mount namespaces via `clone()` + `chroot()` |
-| **Kernel memory monitor** | Loadable kernel module enforces per-container RSS soft/hard limits |
-| **Supervisor daemon** | Long-running parent manages lifecycle, IPC, and logging |
-| **Bounded-buffer logging** | Producer-consumer pipeline captures container stdout/stderr |
-| **UNIX socket CLI** | `start`, `run`, `ps`, `inspect`, `stats`, `logs`, `stop` |
-| **Live stats dashboard** | `engine stats` — refreshes every second with ANSI colors |
-| **Inspect command** | `engine inspect <id>` — full metadata, live RSS, uptime |
-| **Log follow** | `engine logs <id> --follow` — tail -f style streaming |
-| **Graceful shutdown** | SIGTERM → SIGKILL escalation with configurable grace period |
-| **ANSI colors** | Color-coded output for states; auto-disabled for non-TTY pipes |
+Containers are processes with a different view of the system. Kernel-Dock
+builds that view by hand: `clone()` with PID, UTS and mount namespaces plus
+`chroot()` for isolation, a long-running supervisor for lifecycle and logging, a
+UNIX-socket CLI, and a loadable kernel module that watches each container's RSS
+and kills it from kernel space when it crosses a hard limit.
 
 ---
 
-## 🏗️ System Architecture
+## Contents
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                       Supervisor Process                         │
-│                                                                  │
-│  ┌──────────────┐   ┌────────────────┐   ┌──────────────────┐   │
-│  │  IPC Server  │   │  Metadata List │   │  Logger Consumer │   │
-│  │ (UNIX socket)│   │ (linked list,  │   │  Thread          │   │
-│  └──────┬───────┘   │  mutex-guard.) │   └────────┬─────────┘   │
-│         │           └────────────────┘            │ pops        │
-└─────────┼───────────────────────────────────────── ┼────────────┘
-          │ Path B (control)                         │ Path A (logs)
-    ┌─────▼──────┐                           ┌───────┴──────┐
-    │ CLI Client │                           │ Bounded Buf  │
-    │ (engine ps │                           │ (mutex + CV) │
-    │  inspect…) │                           └───────┬──────┘
-    └────────────┘                                   │ pushed by
-                                              ┌──────┴───────┐
-                                              │  Per-Container│
-                                              │  Producer Thd │
-                                              │  (reads pipe) │
-                                              └──────┬───────┘
-                                                     │ pipe
-                                             ┌───────┴───────┐
-                                             │  Container    │
-                                             │  Process      │
-                                             │ (PID/UTS/Mnt  │
-                                             │  namespaces)  │
-                                             └───────┬───────┘
-                                                     │ ioctl
-                                          ┌──────────▼──────────┐
-                                          │  monitor.ko          │
-                                          │  /dev/container_mon  │
-                                          │  · RSS check (1s WQ) │
-                                          │  · soft → dmesg warn │
-                                          │  · hard → SIGKILL    │
-                                          └──────────────────────┘
-```
+| Section | |
+|---|---|
+| [What it does](#what-it-does) | The feature surface, by area |
+| [Architecture](#architecture) | Supervisor, CLI, logging pipeline, kernel monitor |
+| [How a container runs](#how-a-container-runs) | Start, supervise, warn, kill, reap |
+| [Quick start](#quick-start) | Rootfs, build, load, supervise, use |
+| [CLI reference](#cli-reference) | Commands and their output |
+| [Results](#results) | Scheduling and memory-limit experiments |
+| [Project status](#project-status) | What works, and the known limits |
+| [Design decisions](#design-decisions) | Safety properties, and why |
+| [Repository layout](#repository-layout) | Where things live |
+| [Team](#team) | Who built it |
 
-**State machine:**
+---
 
-```
-STARTING → RUNNING → STOPPING → STOPPED
-                   ↓          ↓
-               EXITED       KILLED
+## What it does
+
+| Area | Capabilities |
+|---|---|
+| **Isolation** | `CLONE_NEWPID`, `CLONE_NEWUTS` and `CLONE_NEWNS` via `clone()`, plus `chroot()` into a per-container Alpine rootfs |
+| **Memory enforcement** | `monitor.ko` checks RSS every second: a soft limit warns once in `dmesg`, a hard limit sends `SIGKILL` from kernel space |
+| **Supervisor** | Long-running parent that owns lifecycle, IPC and logging, reaps zombies and tracks exit status |
+| **Logging** | Per-container producer threads read stdout/stderr pipes into a bounded buffer drained by one consumer thread |
+| **CLI** | `start`, `run`, `ps`, `inspect`, `stats`, `logs [--follow]`, `stop` over a UNIX socket |
+| **Lifecycle** | `STARTING → RUNNING → STOPPING → STOPPED`, with `EXITED` and `KILLED`; SIGTERM escalates to SIGKILL after a grace period |
+| **Scheduling** | Per-container `--nice`, used to measure CFS behaviour |
+| **Output** | Aligned tables with live RSS and uptime, a 1 s stats dashboard, ANSI colours disabled for non-TTY pipes |
+
+---
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph user["User space"]
+        CLI["CLI client<br/>engine ps · inspect · stats · logs · stop"]
+
+        subgraph sup["Supervisor process"]
+            IPC["IPC server<br/>UNIX socket · poll() loop"]
+            META["Metadata list<br/>linked list · metadata_lock"]
+            SIG["Self-pipe<br/>SIGCHLD · SIGTERM · SIGINT"]
+            CONS["Logger consumer thread"]
+            BUF["Bounded buffer<br/>mutex + not_full / not_empty"]
+            PROD["Producer thread<br/>per container"]
+        end
+
+        subgraph ctr["Container process"]
+            NS["PID · UTS · mount namespaces<br/>chroot rootfs"]
+        end
+    end
+
+    subgraph kernel["Kernel space"]
+        MON["monitor.ko<br/>/dev/container_monitor"]
+        WQ["workqueue, every 1 s<br/>RSS check"]
+    end
+
+    CLI -->|"control (path B)"| IPC
+    IPC --> META
+    SIG --> IPC
+    NS -->|"stdout/stderr pipe"| PROD
+    PROD -->|"push"| BUF
+    BUF -->|"pop (path A)"| CONS
+    CONS --> LOGS[("logs/ID.log")]
+    IPC -->|"ioctl: register pid + limits"| MON
+    MON --> WQ
+    WQ -->|"soft → dmesg warning"| MON
+    WQ -->|"hard → SIGKILL"| NS
 ```
 
 ---
 
-## 🚀 Build and Run
+## How a container runs
 
-### Prerequisites
+```mermaid
+sequenceDiagram
+    participant C as CLI
+    participant S as Supervisor
+    participant P as Container
+    participant K as monitor.ko
+    participant L as Logger
 
-**OS:** Ubuntu 22.04 or 24.04 in a VM (Secure Boot OFF, no WSL)
+    C->>S: start alpha ./rootfs-alpha /bin/sh --soft-mib 32 --hard-mib 64
+    S->>P: clone(NEWPID | NEWUTS | NEWNS), chroot, sethostname
+    S->>K: ioctl register(pid, soft, hard)
+    S-->>C: started
+    loop while running
+        P->>L: stdout/stderr through the pipe → bounded buffer → log file
+        K->>K: RSS check on the workqueue
+    end
+    K-->>K: RSS > soft → one KERN_WARNING
+    K->>P: RSS > hard → SIGKILL
+    P-->>S: SIGCHLD (via self-pipe)
+    S->>S: waitpid, record exit status, state = killed
+    S-->>C: exit code (for `engine run`)
+```
+
+---
+
+## Quick start
+
+> Ubuntu 22.04 or 24.04 in a VM with Secure Boot off. WSL and macOS do not work.
 
 ```bash
-sudo apt update
-sudo apt install -y build-essential linux-headers-$(uname -r)
-```
+# 0 — toolchain and a preflight check
+sudo apt update && sudo apt install -y build-essential linux-headers-$(uname -r)
+cd boilerplate && sudo ./environment-check.sh
 
-Run the environment preflight check:
-
-```bash
-cd boilerplate
-sudo ./environment-check.sh
-```
-
-### Step 1 — Prepare root filesystems
-
-```bash
-cd boilerplate
-
-# Download Alpine mini rootfs (~3 MB)
+# 1 — root filesystems: one Alpine base, one writable copy per container
 mkdir -p rootfs-base
 wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
 sudo tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C rootfs-base
+for c in alpha beta gamma; do sudo cp -a rootfs-base rootfs-$c; done
 
-# Create per-container writable copies
-sudo cp -a rootfs-base rootfs-alpha
-sudo cp -a rootfs-base rootfs-beta
-sudo cp -a rootfs-base rootfs-gamma
-```
-
-### Step 2 — Build
-
-```bash
-cd boilerplate
-
-# Release build (default)
+# 2 — build (make debug: ASan + UBSan · make ci: no module, no sanitizers)
 make
+for c in alpha beta gamma; do sudo cp memory_hog cpu_hog io_pulse rootfs-$c/; done
 
-# Debug build with AddressSanitizer + UBSan
-make debug
+# 3 — load the kernel module
+sudo insmod monitor.ko && ls -l /dev/container_monitor
 
-# CI-safe build (no kernel module, no sanitizers)
-make ci
-
-# Copy workload binaries into container filesystems
-sudo cp memory_hog cpu_hog io_pulse rootfs-alpha/
-sudo cp memory_hog cpu_hog io_pulse rootfs-beta/
-sudo cp memory_hog cpu_hog io_pulse rootfs-gamma/
-```
-
-### Step 3 — Load kernel module
-
-```bash
-sudo insmod monitor.ko
-lsmod | grep monitor          # verify
-ls -l /dev/container_monitor  # device should appear
-dmesg | tail -3               # expect: Module loaded
-```
-
-### Step 4 — Start supervisor
-
-**Terminal 1:**
-```bash
+# 4 — terminal 1: the supervisor
 sudo ./engine supervisor ./rootfs-base
-```
 
-```
-Supervisor started (PID 4201). Listening on /tmp/mini_runtime.sock
-Kernel monitor: enabled
-Ready.
-```
-
-### Step 5 — Use the CLI
-
-**Terminal 2:**
-```bash
-# Start containers (commands support arguments)
-sudo ./engine start alpha ./rootfs-alpha /bin/sh           --soft-mib 32 --hard-mib 64
-sudo ./engine start gamma ./rootfs-gamma "/cpu_hog 30"     --nice -5 --soft-mib 40 --hard-mib 64
-
-# List all containers (aligned table with live RSS and uptime)
+# 5 — terminal 2: containers
+sudo ./engine start alpha ./rootfs-alpha /bin/sh       --soft-mib 32 --hard-mib 64
+sudo ./engine start gamma ./rootfs-gamma "/cpu_hog 30" --nice -5 --soft-mib 40 --hard-mib 64
 sudo ./engine ps
+sudo ./test_experiments.sh                    # 10 tests, PASS/FAIL table
 
-# Detailed info for one container
-sudo ./engine inspect alpha
-
-# Live stats dashboard (1 s refresh, Ctrl-C to exit)
-sudo ./engine stats
-
-# View recent log output (last 4 KB)
-sudo ./engine logs alpha
-
-# Stream new log output as it arrives
-sudo ./engine logs alpha --follow
-
-# Stop gracefully (SIGTERM, then SIGKILL after 5 s)
-sudo ./engine stop alpha
-
-# Run foreground (block until container exits, return exit code)
-sudo ./engine run test ./rootfs-alpha "/cpu_hog 5" --soft-mib 32 --hard-mib 64
+# 6 — cleanup: Ctrl-C the supervisor (SIGTERM to all, logs drained), then
+sudo rmmod monitor && ./cleanup_verification.sh
 ```
-
-### Step 6 — Cleanup
-
-```bash
-# Ctrl-C in Terminal 1 — supervisor sends SIGTERM to all containers, drains logs
-sudo rmmod monitor
-dmesg | tail -5   # expect: Module unloaded
-./cleanup_verification.sh
-```
-
-### Automated test suite
-
-```bash
-# With supervisor running and module loaded:
-sudo ./test_experiments.sh
-```
-
-Runs 10 tests and prints a PASS/FAIL summary table.
 
 ---
 
-## 📸 Demo Screenshots
-
-### 1. Multi-Container Supervision
-![Multi-container supervision](screenshots/1_multi_container_supervision.png)
-
-*Two containers running simultaneously under one supervisor.*
-
-### 2. Metadata Tracking (`ps`)
-![Metadata tracking](screenshots/2_metadata_tracking_ps.png)
-
-*`ps` showing aligned columns: NAME, PID, STATE, UPTIME, RSS, SOFT, HARD, COMMAND.*
-
-### 3. Bounded-Buffer Logging
-![Logging system](screenshots/3_bounded_buffer_logging.png)
-
-*Log files captured through the producer-consumer pipeline.*
-
-### 4. CLI and IPC
-![CLI commands](screenshots/4_cli_ipc.png)
-
-*CLI commands sent via UNIX socket with supervisor responses.*
-
-### 5. Soft-Limit Warning
-![Soft limit](screenshots/5_soft_limit_warning.png)
-
-*Kernel log showing soft memory limit warning from monitor.ko.*
-
-### 6. Hard-Limit Enforcement
-![Hard limit](screenshots/6_hard_limit_enforcement.png)
-
-*Container killed from kernel space after exceeding the hard RSS limit.*
-
-### 7. Scheduling Experiment
-![Scheduling](screenshots/7_scheduling_experiment.png)
-
-*Two CPU-bound containers with nice -10 vs nice 19 showing different CPU shares.*
-
-### 8. Clean Teardown
-![Cleanup — stopped](screenshots/8a_clean_teardown_stopped.png)
-![Cleanup — module unloaded](screenshots/8b_clean_teardown_module_unloaded.png)
-
-*Zero zombie processes after shutdown; module unloads cleanly.*
-
----
-
-## 🖥️ CLI Reference
+## CLI reference
 
 ```
 engine supervisor <base-rootfs>
@@ -264,8 +167,6 @@ engine logs    <id> [--follow | -f]
 engine stop    <id>
 ```
 
-### `engine ps` columns
-
 ```
 NAME          PID      STATE      UPTIME      RSS      SOFT     HARD     COMMAND
 alpha         4123     running    0h01m23s    14 MB    32 MB    64 MB    /bin/sh
@@ -273,223 +174,146 @@ beta          4125     stopping   0h00m45s    28 MB    32 MB    64 MB    /cpu_ho
 gamma         4132     killed     -           -        64 MB    64 MB    /memory_hog  (sig 9)
 ```
 
-### `engine inspect <id>` output
+`engine run` blocks until the container exits and returns its exit code;
+`engine logs` returns the last 4 KB, and `--follow` streams like `tail -f`.
+
+| | |
+|---|---|
+| ![Multi-container supervision](screenshots/1_multi_container_supervision.png) | ![Metadata tracking](screenshots/2_metadata_tracking_ps.png) |
+| **Two containers under one supervisor** | **`ps` with live RSS and uptime** |
+| ![Soft limit](screenshots/5_soft_limit_warning.png) | ![Hard limit](screenshots/6_hard_limit_enforcement.png) |
+| **Soft-limit warning from `monitor.ko`** | **Killed from kernel space at the hard limit** |
+
+More captures — logging, IPC, scheduling and clean teardown — are in
+[screenshots/](screenshots/).
+
+---
+
+## Results
+
+### CPU priority
+
+Two CPU-bound containers, nice −10 vs nice 19:
+
+| Container | Nice | CPU % |
+|---|---:|---:|
+| cpu-high | −10 | 65% |
+| cpu-low | 19 | 35% |
+
+Lower nice values grow vruntime more slowly, keeping the task near the front of
+CFS's red-black tree, so CPU is shared by weight.
+
+### CPU-bound vs I/O-bound
+
+| Container | Type | CPU % | Wait % | Ctx switches/s | Latency |
+|---|---|---:|---:|---:|---:|
+| cpuwork | CPU | 92% | 2% | 25 | ~200 ms |
+| iowork | I/O | 8% | 65% | 800 | ~10 ms |
+
+The I/O-bound process got roughly 10× better response latency on far less CPU —
+CFS credits time spent sleeping, so wakeups dispatch quickly.
+
+### Memory-limit enforcement
+
+| Event | Elapsed | RSS |
+|---|---:|---:|
+| Soft-limit warning | 5.2 s | 22 MiB |
+| Hard-limit kill | 8.7 s | 37 MiB |
+
+State moved `running → killed`. Enforcement in kernel space cannot be bypassed
+from user space, and the warn-then-kill tiers leave an intervention window.
+
+---
+
+## Project status
+
+The runtime, kernel module, CLI and test suite are complete for the course
+specification ([project-guide.md](project-guide.md)). CI compiles the CI-safe
+build and checks the CLI's usage output on every push.
+
+| Known limit | Detail |
+|---|---|
+| No network namespace | Containers share the host network stack |
+| No user namespace | Containers run as root, the supervisor's UID |
+| Log tail | `engine logs` returns at most 4 KB; use `--follow` to stream |
+| Command parsing | The 256-byte command is split on spaces; quoting is not supported |
+| Single host | One supervisor manages all containers |
+| Linux only | Needs a native Linux VM |
+
+| Next | |
+|---|---|
+| Network namespace per container | `CLONE_NEWNET` + bridge setup |
+| User namespace | Unprivileged operation |
+| cgroup v2 | CPU and I/O limits beside RSS enforcement |
+| Image layering, checkpoint/restore | Overlay bind mounts, CRIU |
+
+---
+
+## Design decisions
+
+**Self-pipe for signals.** Handlers only `write()` the signal number to a pipe;
+the `poll()` loop reads it and dispatches where mutexes and `ioctl` are safe.
+
+**`poll()` with a 1 s timeout.** One loop handles socket I/O, signals and
+time-based SIGTERM → SIGKILL escalation for containers stuck in `STOPPING`.
+
+**The supervisor is every container's parent.** That makes zombie reaping via
+`SIGCHLD` and exact exit statuses possible; `engine run` keeps the CLI's socket
+and answers it from `reap_children()`.
+
+**A workqueue, not a timer, in the module.** RSS checks run in process context,
+so `mutex_lock()` and the slow `get_mm_rss()` are allowed; a raw timer runs in
+softirq context where sleeping is forbidden. `get_task_mm()` under the RCU read
+lock with a pinned `task_struct` prevents use-after-free.
+
+**Two-tier limits.** The soft limit gives visibility once per container (a flag
+stops log spam); the hard limit gives enforcement, avoiding kill/restart
+oscillation at a single boundary.
+
+**A small bounded buffer.** Capacity 16 makes back-pressure visible and keeps
+memory bounded; shutdown sets a flag and broadcasts both condition variables so
+every thread wakes and drains.
+
+**Clean teardown is checked, not assumed.** Zombies are reaped in a
+`waitpid(-1, WNOHANG)` loop, the logger drains before `pthread_join()`, every fd
+and stack is released on every path, the module `kfree()`s its list on exit, and
+`cleanup_verification.sh` looks for leaks afterwards.
+
+---
+
+## Repository layout
 
 ```
-Container ID  : alpha
-PID           : 4312
-Parent PID    : 4201
-State         : running
-Start Time    : 2026-06-21 15:10:22
-Stop Time     : N/A
-Uptime        : 0h08m13s
-RootFS        : ./rootfs-alpha
-Hostname      : alpha
-Command       : /bin/sh
-RSS           : 18 MiB
-Soft Limit    : 32 MiB
-Hard Limit    : 64 MiB
-Exit Status   : N/A
-Log File      : logs/alpha.log
-```
-
-### `engine stats` output (live dashboard)
-
-```
-CONTAINER STATS  2026-06-21 15:22:44  (Ctrl-C to exit)
-
-NAME           PID      RSS      SOFT     HARD     STATUS      UPTIME
-──────────────────────────────────────────────────────────────────────
-alpha          4123     14 MB    32 MB    64 MB    RUNNING     0h08m13s
-beta           4125     35 MB    32 MB    64 MB    WARNING     0h07m50s  ← soft limit exceeded
-gamma          4132     -        64 MB    64 MB    KILLED      -
-```
-
----
-
-## 🧪 Scheduling Experiments
-
-### Experiment 1: CPU Priority Impact
-
-**Setup:** Two CPU-bound containers, nice -10 vs nice 19
-
-| Container | Nice | CPU % | Notes |
-|-----------|------|-------|-------|
-| cpu-high  | -10  | 65%   | Higher weight → more CPU time |
-| cpu-low   | 19   | 35%   | Lower weight → less CPU time |
-
-**Analysis:** CFS weight ratio for nice -10 / nice 19 ≈ 1.86. The scheduler allocated CPU proportionally, demonstrating vruntime-based fairness. Lower nice values cause slower vruntime growth, keeping the process at the front of the red-black tree.
-
-### Experiment 2: CPU-Bound vs I/O-Bound
-
-| Container | Type | CPU % | Wait % | Ctx Switches/s | Latency |
-|-----------|------|-------|--------|----------------|---------|
-| cpuwork   | CPU  | 92%   | 2%     | 25             | ~200 ms |
-| iowork    | I/O  | 8%    | 65%    | 800            | ~10 ms  |
-
-**Analysis:** The I/O-bound process received 10× better response latency despite using far less total CPU. CFS "sleep fairness" gives processes credit for time spent waiting, delivering low dispatch latency on wakeup.
-
-### Experiment 3: Memory Limit Enforcement
-
-- Soft limit warning: **5.2 s** elapsed (RSS: 22 MiB)
-- Hard limit kill: **8.7 s** elapsed (RSS: 37 MiB)
-- Container state: `running` → `killed`
-
-**Analysis:** Kernel-space enforcement via `monitor.ko` cannot be bypassed from user space. The two-tier design (warn then kill) provides an intervention window before the final kill.
-
----
-
-## 🔬 Engineering Analysis
-
-### 1. Isolation
-
-- **`CLONE_NEWPID`** — Container sees itself as PID 1; cannot signal host processes.
-- **`CLONE_NEWUTS`** — Independent hostname (`sethostname` sets it to the container ID).
-- **`CLONE_NEWNS` + `chroot()`** — Container sees only its assigned rootfs as `/`.
-- **Not isolated:** network, IPC, and user namespaces (shared with host in this implementation).
-
-### 2. Supervisor and Lifecycle
-
-`clone()` with namespace flags creates isolated children. The supervisor is the direct parent of every container — essential for zombie reaping via SIGCHLD and for accurate exit-status tracking.
-
-**Self-pipe pattern:** Signal handlers write the signal number to `g_signal_pipe[1]`. The main `poll()` loop reads from `g_signal_pipe[0]` and dispatches in a context where mutexes and ioctl are safe. This is the correct way to avoid async-signal-safety violations.
-
-**Deferred CMD_RUN:** The supervisor stores the CLI socket FD in the container record. `reap_children()` writes the exit status to that FD when the container exits, giving the CLI the correct process exit code.
-
-**STOPPING state:** When `engine stop` is issued, the state transitions to `CONTAINER_STOPPING`. `check_stop_escalation()` watches for containers in STOPPING state past the grace period and escalates to SIGKILL.
-
-### 3. IPC and Synchronization
-
-| Mechanism | Purpose | Synchronization |
-|-----------|---------|-----------------|
-| UNIX socket | CLI ↔ supervisor control | Single-threaded main loop |
-| Pipes | Container stdout/stderr → supervisor | None (one pipe per container) |
-| Bounded buffer | Producer threads → consumer thread | `pthread_mutex_t` + two `pthread_cond_t` |
-| `metadata_lock` | Protects container linked list | `pthread_mutex_t` |
-
-The bounded buffer uses the standard producer-consumer pattern:
-- Producers wait on `not_full` while the buffer is at capacity.
-- The consumer waits on `not_empty` while the buffer is empty.
-- Shutdown sets `shutting_down = 1` and broadcasts both CVs.
-
-### 4. Kernel Memory Monitor
-
-**`get_rss_bytes(pid)`** uses `get_task_mm()` + `get_mm_rss()` under RCU read lock, preventing use-after-free on the `task_struct`.
-
-**Workqueue vs timer:** RSS checking runs in a `create_singlethread_workqueue` (process context), allowing `mutex_lock()`. A raw `timer_setup()` runs in softirq context where sleeping and heavy locking are forbidden.
-
-**Soft/hard limits:**
-- Soft: one-time `printk(KERN_WARNING …)` per container. `soft_warning_emitted` flag prevents log spam.
-- Hard: `send_sig(SIGKILL, task, 1)` from kernel space — cannot be caught or bypassed.
-
-### 5. Scheduling
-
-CFS assigns virtual runtime to every runnable task. Nice values translate to per-task weights; lower nice → slower vruntime growth → process stays near the front of the red-black tree → more scheduled time slices. I/O-bound tasks get "sleep credit" on wakeup, enabling low-latency dispatch despite low total CPU use.
-
----
-
-## 🎯 Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| Self-pipe for signal delivery | Async-signal-safety: only `write()` and `read()` are called in signal context |
-| `poll()` with 1 s timeout | Handles both I/O events and time-based escalation in one loop |
-| Mutex over spinlock in kernel module | `get_mm_rss()` is slow; running under a workqueue (process context) allows sleeping locks |
-| Deferred CMD_RUN response | CLI exit code matches container exit code without a separate wait mechanism |
-| STOPPING state | Cleanly separates "stop requested" from "running" without an extra boolean field |
-| Bounded buffer capacity 16 | Small enough to be educational; push-back pressure prevents unbounded memory use |
-| Two-tier memory limits | Soft gives visibility; hard gives enforcement. Avoids kill/restart oscillation at the boundary |
-
----
-
-## 🧹 Resource Cleanup
-
-1. **Zombies** — `SIGCHLD` via self-pipe triggers `waitpid(-1, WNOHANG)` loop.
-2. **Threads** — Logger thread drains the bounded buffer before exiting; `pthread_join()` waits.
-3. **File descriptors** — Pipe write-end closed in parent after `clone()`; producer closes read-end when EOF; socket closed after each client interaction.
-4. **Kernel memory** — `monitor_exit()` walks the list and `kfree()`s every entry.
-5. **Container stacks** — Freed in `reap_children()` after `waitpid()` confirms the child stack is no longer in use.
-6. **Mutex/CV** — Every `pthread_mutex_init` / `pthread_cond_init` has a matching destroy on all exit paths.
-
----
-
-## 🔒 Safety Properties
-
-| Property | Mechanism |
-|----------|-----------|
-| Async-signal-safety | Self-pipe — only `write()` called in signal handler |
-| No data races on metadata | `metadata_lock` held for all container list reads/writes |
-| No data races on log buffer | `log_buffer.mutex` + condition variables |
-| No use-after-free (kernel) | RCU read lock + `get_task_struct` pin before dereferencing |
-| No FD leaks on error paths | Every allocation/open covered by cleanup on each failure branch |
-
----
-
-## ⚠️ Known Limitations
-
-- **No network namespace** — containers share the host network stack.
-- **No user namespace** — containers run as root (same UID as supervisor).
-- **Log size** — `engine logs` returns at most 4 KB (tail). Use `--follow` for streaming.
-- **Command arguments** — The `<command>` field (256 bytes) is split on spaces; quoting within the command is not supported.
-- **Single supervisor** — One supervisor process manages all containers; no multi-host support.
-- **Linux only** — Requires a native Linux VM; does not work on WSL or macOS.
-
----
-
-## 📁 Repository Structure
-
-```
-Kernel-Dock/
-├── README.md
-├── project-guide.md            original assignment specification
-├── .github/
-│   └── workflows/
-│       └── submission-smoke.yml  CI: compile + usage check
-└── boilerplate/
-    ├── Makefile                 all / release / debug / ci / clean
-    ├── engine.c                 supervisor daemon + CLI client
-    ├── monitor.c                kernel module (RSS tracking + enforcement)
-    ├── monitor_ioctl.h          shared ioctl definitions
-    ├── cpu_hog.c                CPU-bound workload generator
-    ├── memory_hog.c             memory allocation workload
-    ├── io_pulse.c               I/O-bound workload generator
-    ├── environment-check.sh     preflight: OS, kernel headers, module test
-    ├── test_experiments.sh      10-test suite with PASS/FAIL summary
-    └── cleanup_verification.sh  post-run resource leak checker
+.
+├── boilerplate/
+│   ├── engine.c                 supervisor daemon + CLI client
+│   ├── monitor.c                kernel module: RSS tracking and enforcement
+│   ├── monitor_ioctl.h          shared ioctl definitions
+│   ├── cpu_hog.c · memory_hog.c · io_pulse.c   workload generators
+│   ├── Makefile                 all / release / debug / ci / clean
+│   ├── environment-check.sh     preflight: OS, kernel headers, module test
+│   ├── test_experiments.sh      10-test suite with a PASS/FAIL summary
+│   └── cleanup_verification.sh  post-run resource-leak checker
+├── screenshots/                 demo captures
+├── project-guide.md             the original assignment specification
+└── .github/workflows/           CI: compile + usage check
 ```
 
 ---
 
-## 📚 Key Learnings
+## Team
 
-- Linux namespaces and how the kernel isolates process trees
-- `clone()` vs `fork()` — fine-grained sharing control
-- Async-signal-safety and the self-pipe pattern
-- Producer-consumer synchronization with condition variables
-- Kernel module development: character devices, ioctl, workqueues
-- Linux memory management: RSS, page tables, `get_mm_rss()`
-- CFS scheduler: vruntime, weights, nice values, sleep fairness
+| Member | Focus |
+|---|---|
+| **Guru R Bharadwaj** (PES1UG24CS177) | Core runtime, container engine, CLI |
+| **Harsh Pandya** (PES1UG24CS182) | Logging pipeline, IPC, kernel monitor, experiments |
 
----
-
-## 🔮 Future Enhancements
-
-- Network namespace per container (requires `CLONE_NEWNET` + bridge setup)
-- User namespace for unprivileged operation
-- Cgroup v2 integration for CPU/I/O limits (in addition to current RSS enforcement)
-- Container image layering with bind-mount overlays
-- Checkpoint/restore via CRIU integration
+Thanks to the course instructors for the specification, Alpine Linux for the
+minimal rootfs, and the Linux kernel documentation.
 
 ---
 
-## 📄 License
+## License
 
-Educational project. Not intended for production use.
-
----
-
-## 🙏 Acknowledgments
-
-- Course instructors for the project specification
-- Alpine Linux for the minimal rootfs
-- Linux kernel documentation
+Educational project, not intended for production use. No license file is
+included.
