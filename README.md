@@ -1,5 +1,13 @@
 # Kernel-Dock
 
+<p align="center">
+  <a href="Kernel-Dock%20Demo.mp4">
+    <img src="screenshots/Kernel-Dock%20Demo%20thumbnail.png" alt="Watch the Kernel-Dock demo video" width="720">
+  </a>
+  <br>
+  <sub>▶ <b><a href="Kernel-Dock%20Demo.mp4">Watch the Kernel-Dock demo</a></b> (74 s): the six spec tasks, 26 commits, CI run #15, and the quick start run in a throwaway VM with <code>monitor.ko</code> loaded</sub>
+</p>
+
 **A Linux container runtime built from scratch in C — namespaces, a supervisor daemon, a kernel module that enforces memory limits, and a full CLI, without Docker or cgroups.**
 
 [![CI](https://img.shields.io/badge/CI-compile_+_usage_smoke-2ea44f?logo=githubactions&logoColor=white)](.github/workflows/submission-smoke.yml)
